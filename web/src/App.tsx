@@ -1,0 +1,30 @@
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { AppLayout } from './components/AppLayout'
+import { RootRedirect } from './pages/RootRedirect'
+import { MissionsPage } from './pages/MissionsPage'
+import { AgentsPage } from './pages/AgentsPage'
+import { PluginsPage } from './pages/PluginsPage'
+import { MissionDetail } from './pages/MissionDetail'
+import { MissionRun } from './pages/MissionRun'
+import { MissionHistory } from './pages/MissionHistory'
+import { AgentDetail } from './pages/AgentDetail'
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<RootRedirect />} />
+      <Route path="/instances/:id" element={<AppLayout />}>
+        <Route index element={<Navigate to="missions" replace />} />
+        <Route path="missions" element={<MissionsPage />} />
+        <Route path="agents" element={<AgentsPage />} />
+        <Route path="agents/:name" element={<AgentDetail />} />
+        <Route path="plugins" element={<PluginsPage />} />
+        <Route path="history" element={<MissionHistory />} />
+        <Route path="missions/:name" element={<MissionDetail />} />
+        <Route path="missions/:name/run" element={<MissionRun />} />
+      </Route>
+    </Routes>
+  )
+}
+
+export default App
