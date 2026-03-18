@@ -2,6 +2,14 @@ import { useQuery } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getInstance, getMissionHistory } from '@/api/client';
 import { StatusBadge, formatTime, formatDuration } from '@/lib/mission-utils';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 export function MissionHistory() {
   const { id } = useParams<{ id: string }>();
@@ -35,33 +43,33 @@ export function MissionHistory() {
       )}
 
       {history && history.missions && history.missions.length > 0 && (
-        <div className="bg-card rounded-lg border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-muted border-b">
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Mission</th>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Started</th>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Duration</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Mission</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Started</TableHead>
+                <TableHead>Duration</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {history.missions.map((m) => (
-                <tr key={m.id} className="border-b last:border-b-0 hover:bg-muted/50 cursor-pointer" onClick={() => navigate(`/instances/${id}/runs/${m.id}`)}>
-                  <td className="px-4 py-3 font-medium">{m.name}</td>
-                  <td className="px-4 py-3">
+                <TableRow key={m.id} className="cursor-pointer" onClick={() => navigate(`/instances/${id}/runs/${m.id}`)}>
+                  <TableCell className="font-medium">{m.name}</TableCell>
+                  <TableCell>
                     <StatusBadge status={m.status} />
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
                     {formatTime(m.startedAt)}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
                     {m.finishedAt ? formatDuration(m.startedAt, m.finishedAt) : '\u2014'}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
 

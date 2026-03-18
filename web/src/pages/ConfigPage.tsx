@@ -5,18 +5,19 @@ import { toast } from 'sonner';
 import { listConfigFiles, getConfigFile, writeConfigFile, reloadConfig, validateConfig } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { FileCode, Save, RefreshCw, Undo2, CheckCircle, X, ChevronRight, ChevronDown } from 'lucide-react';
+import { FileCode, Save, RefreshCw, Undo2, CheckCircle, X, ChevronRight, ChevronDown, Eye, EyeOff, Code } from 'lucide-react';
+import { MarkdownPreview } from '@/components/MarkdownPreview';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, RangeSet, StateField, StateEffect } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { bracketMatching, foldGutter, indentOnInput, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
+import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
-import { tags as t } from '@lezer/highlight';
-import { hcl } from 'codemirror-lang-hcl';
-import { json } from '@codemirror/lang-json';
-import { markdown } from '@codemirror/lang-markdown';
-import { python } from '@codemirror/lang-python';
-import { go } from '@codemirror/lang-go';
+import {
+  editorStructuralTheme,
+  getLanguageExtension,
+  getThemeExtensions,
+} from '@/lib/codemirror-setup';
 import { useTheme } from '@/components/ThemeProvider';
 
 // --- Diff computation (Myers-like LCS diff) ---
@@ -157,131 +158,7 @@ function createChangeGutter(onGutterClick: () => void) {
   });
 }
 
-// --- Editor themes ---
-
-const editorStructuralTheme = EditorView.theme({
-  '&': {
-    height: '100%',
-    fontSize: '13px',
-  },
-  '.cm-scroller': {
-    fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-    overflow: 'auto',
-  },
-  '.cm-content': {
-    padding: '8px 0',
-  },
-  '.cm-change-gutter': {
-    width: '4px',
-    minWidth: '4px',
-  },
-  '.cm-change-gutter .cm-gutterElement': {
-    padding: '0',
-    cursor: 'pointer',
-  },
-});
-
-// Material Dark theme for CodeMirror 6 (from cm6-theme-material-dark)
-const materialDarkTheme = EditorView.theme({
-  '&': { backgroundColor: '#2e3235', color: '#bdbdbd' },
-  '.cm-content': { caretColor: '#a0a4ae' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#a0a4ae' },
-  '.cm-selectionBackground': { backgroundColor: '#505d64 !important' },
-  '.cm-gutters': {
-    backgroundColor: '#2e3235',
-    borderRight: '1px solid #4f5b66',
-    color: '#606f7a',
-  },
-  '.cm-activeLineGutter': { backgroundColor: '#545b61', color: '#fdf6e3' },
-  '.cm-activeLine': { backgroundColor: '#545b61' },
-  '.cm-matchingBracket': { color: '#e0e0e0', outline: '1px solid #4ebaaa' },
-  '.cm-searchMatch': { outline: '1px solid #facf4e', backgroundColor: 'transparent' },
-  '.cm-foldPlaceholder': { backgroundColor: 'transparent', border: 'none', color: '#ddd' },
-}, { dark: true });
-
-const materialDarkHighlightStyle = HighlightStyle.define([
-  { tag: t.keyword, color: '#cf6edf' },
-  { tag: [t.name, t.deleted, t.character, t.macroName], color: '#56c8d8' },
-  { tag: [t.propertyName], color: '#facf4e' },
-  { tag: [t.variableName], color: '#bdbdbd' },
-  { tag: [t.function(t.variableName)], color: '#56c8d8' },
-  { tag: [t.labelName], color: '#cf6edf' },
-  { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: '#facf4e' },
-  { tag: [t.definition(t.name), t.separator], color: '#fa5788' },
-  { tag: [t.brace], color: '#cf6edf' },
-  { tag: [t.number, t.changed, t.annotation, t.modifier, t.self, t.namespace], color: '#ffad42' },
-  { tag: [t.typeName, t.className], color: '#ffad42' },
-  { tag: [t.operator, t.operatorKeyword], color: '#7186f0' },
-  { tag: [t.tagName], color: '#ff6e40' },
-  { tag: [t.squareBracket], color: '#ff5f52' },
-  { tag: [t.angleBracket], color: '#606f7a' },
-  { tag: [t.attributeName], color: '#bdbdbd' },
-  { tag: [t.regexp], color: '#ff5f52' },
-  { tag: [t.quote], color: '#6abf69' },
-  { tag: [t.string], color: '#99d066' },
-  { tag: t.link, color: '#56c8d8', textDecoration: 'underline' },
-  { tag: [t.url, t.escape, t.special(t.string)], color: '#facf4e' },
-  { tag: [t.meta], color: '#707d8b' },
-  { tag: [t.comment], color: '#707d8b', fontStyle: 'italic' },
-  { tag: t.strong, fontWeight: 'bold', color: '#ff5f52' },
-  { tag: t.emphasis, fontStyle: 'italic', color: '#99d066' },
-  { tag: t.strikethrough, textDecoration: 'line-through' },
-  { tag: t.heading, fontWeight: 'bold', color: '#facf4e' },
-  { tag: [t.atom, t.bool, t.special(t.variableName)], color: '#56c8d8' },
-  { tag: [t.processingInstruction, t.inserted], color: '#ff5f52' },
-  { tag: t.invalid, color: '#606f7a', borderBottom: '1px dotted #ff5f52' },
-]);
-
-// CM5 "neat" theme ported to CM6
-const neatTheme = EditorView.theme({
-  '&': { backgroundColor: '#ffffff' },
-  '.cm-gutters': {
-    backgroundColor: '#f5f5f5',
-    borderRight: '1px solid #ddd',
-    color: '#999',
-  },
-  '.cm-activeLineGutter': { backgroundColor: '#e8f2ff' },
-  '.cm-activeLine': { backgroundColor: '#e8f2ff' },
-  '.cm-selectionBackground': { backgroundColor: '#d7d4f0 !important' },
-  '.cm-cursor': { borderLeftColor: '#000' },
-}, { dark: false });
-
-const neatHighlightStyle = HighlightStyle.define([
-  { tag: t.keyword, color: '#0000ff', fontWeight: 'bold' },
-  { tag: [t.name, t.deleted, t.character, t.macroName], color: '#000' },
-  { tag: [t.propertyName], color: '#000' },
-  { tag: [t.processingInstruction, t.string, t.inserted, t.special(t.string)], color: '#aa2222' },
-  { tag: [t.function(t.variableName), t.labelName], color: '#007700' },
-  { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: '#007700' },
-  { tag: [t.definition(t.name), t.separator], color: '#000' },
-  { tag: [t.className], color: '#007700' },
-  { tag: [t.number, t.changed, t.annotation, t.modifier, t.self, t.namespace], color: '#33aa33' },
-  { tag: [t.typeName], color: '#077' },
-  { tag: [t.operator, t.operatorKeyword], color: '#000' },
-  { tag: [t.url, t.escape, t.regexp, t.link], color: '#33aa33' },
-  { tag: [t.meta, t.comment], color: '#aa8866' },
-  { tag: t.tagName, color: '#077' },
-  { tag: t.strong, fontWeight: 'bold' },
-  { tag: t.emphasis, fontStyle: 'italic' },
-  { tag: t.link, textDecoration: 'underline' },
-  { tag: t.heading, fontWeight: 'bold', color: '#0000ff' },
-  { tag: [t.atom, t.bool, t.special(t.variableName)], color: '#33aa33' },
-  { tag: t.strikethrough, textDecoration: 'line-through' },
-]);
-
-// --- Language detection ---
-
-function getLanguageExtension(filename: string) {
-  const ext = filename.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'hcl': return hcl();
-    case 'json': return json();
-    case 'md': case 'markdown': return markdown();
-    case 'py': return python();
-    case 'go': return go();
-    default: return [];
-  }
-}
+// Theme and language definitions imported from @/lib/codemirror-setup
 
 // --- Inline Diff Viewer ---
 
@@ -323,6 +200,11 @@ function DiffViewer({ original, modified, onClose }: { original: string; modifie
   );
 }
 
+function isMarkdownFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase();
+  return ext === 'md' || ext === 'markdown';
+}
+
 // --- Main ConfigPage ---
 
 export function ConfigPage() {
@@ -337,6 +219,14 @@ export function ConfigPage() {
   const [validating, setValidating] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [codeOpen, setCodeOpen] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewContent, setPreviewContent] = useState('');
+  const { width: previewWidth, handleResizeStart: handlePreviewResizeStart } = useHorizontalResize({
+    initialWidth: 480,
+    minWidth: 200,
+    maxWidth: 800,
+  });
 
   // Browser-only pending changes: filename → modified content
   const [pendingChanges, setPendingChanges] = useState<Map<string, string>>(new Map());
@@ -365,6 +255,15 @@ export function ConfigPage() {
       setSelectedFile(fileList.files[0].name);
     }
   }, [fileList, selectedFile]);
+
+  // Auto-toggle preview when switching files
+  useEffect(() => {
+    if (selectedFile) {
+      const md = isMarkdownFile(selectedFile);
+      setPreviewOpen(md);
+      setCodeOpen(true);
+    }
+  }, [selectedFile]);
 
   const allowEdit = fileList?.allowConfigEdit ?? false;
 
@@ -415,9 +314,7 @@ export function ConfigPage() {
       indentOnInput(),
       highlightSelectionMatches(),
       getLanguageExtension(selectedFile),
-      resolvedTheme === 'dark'
-        ? [materialDarkTheme, syntaxHighlighting(materialDarkHighlightStyle)]
-        : [neatTheme, syntaxHighlighting(neatHighlightStyle)],
+      getThemeExtensions(resolvedTheme),
       editorStructuralTheme,
       history(),
       keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
@@ -442,6 +339,8 @@ export function ConfigPage() {
           }
           // Update gutter markers
           updateGutterMarkers(update.view, original);
+          // Update preview content
+          setPreviewContent(newContent);
         }
       }),
     ];
@@ -461,6 +360,9 @@ export function ConfigPage() {
     // Set initial gutter markers
     const initialChanges = computeLineChanges(original, docContent);
     view.dispatch({ effects: setChangeMarkers.of(initialChanges) });
+
+    // Set initial preview content
+    setPreviewContent(docContent);
 
     return () => {
       view.destroy();
@@ -641,6 +543,30 @@ export function ConfigPage() {
               </Button>
             </>
           )}
+          {selectedFile && isMarkdownFile(selectedFile) && (
+            <>
+              <Button
+                variant={codeOpen ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 text-xs gap-1.5"
+                onClick={() => { if (!codeOpen || previewOpen) setCodeOpen(!codeOpen); }}
+                title={codeOpen ? 'Hide code' : 'Show code'}
+              >
+                <Code className="h-3.5 w-3.5" />
+                Code
+              </Button>
+              <Button
+                variant={previewOpen ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 text-xs gap-1.5"
+                onClick={() => { if (!previewOpen || codeOpen) setPreviewOpen(!previewOpen); }}
+                title={previewOpen ? 'Hide preview' : 'Show preview'}
+              >
+                {previewOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                Preview
+              </Button>
+            </>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -751,20 +677,38 @@ export function ConfigPage() {
           className="w-1 shrink-0 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors"
         />
 
-        {/* Editor */}
-        <div className="flex-1 min-h-0 relative">
-          {contentLoading ? (
-            <div className="p-4 text-sm text-muted-foreground">Loading...</div>
-          ) : !selectedFile ? (
-            <div className="p-4 text-sm text-muted-foreground">Select a file to view.</div>
-          ) : showDiff ? (
-            <DiffViewer
-              original={currentFileOriginal}
-              modified={currentFilePending ?? currentFileOriginal}
-              onClose={() => setShowDiff(false)}
+        {/* Editor + Preview */}
+        <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+          <div className={cn('flex-1 min-h-0 min-w-0 relative', !codeOpen && 'hidden')}>
+            {contentLoading ? (
+              <div className="p-4 text-sm text-muted-foreground">Loading...</div>
+            ) : !selectedFile ? (
+              <div className="p-4 text-sm text-muted-foreground">Select a file to view.</div>
+            ) : showDiff ? (
+              <DiffViewer
+                original={currentFileOriginal}
+                modified={currentFilePending ?? currentFileOriginal}
+                onClose={() => setShowDiff(false)}
+              />
+            ) : (
+              <div ref={editorRef} className="absolute inset-0 overflow-hidden" />
+            )}
+          </div>
+
+          {codeOpen && previewOpen && selectedFile && isMarkdownFile(selectedFile) && !showDiff && (
+            <div
+              onMouseDown={handlePreviewResizeStart}
+              className="w-1 shrink-0 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors"
             />
-          ) : (
-            <div ref={editorRef} className="absolute inset-0 overflow-hidden" />
+          )}
+
+          {previewOpen && selectedFile && isMarkdownFile(selectedFile) && !showDiff && (
+            <div className={cn(
+              'border-l overflow-hidden flex flex-col min-w-0',
+              !codeOpen && 'flex-1',
+            )} style={codeOpen ? { flexBasis: previewWidth, flexShrink: 1, flexGrow: 0 } : undefined}>
+              <MarkdownPreview content={previewContent} />
+            </div>
           )}
         </div>
       </div>

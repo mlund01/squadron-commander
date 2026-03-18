@@ -30,7 +30,8 @@ type InstanceConfig struct {
 	Agents    []AgentInfo    `json:"agents"`
 	Missions  []MissionInfo  `json:"missions"`
 	Plugins   []PluginInfo   `json:"plugins"`
-	Variables []VariableInfo `json:"variables"`
+	Variables    []VariableInfo    `json:"variables"`
+	SharedFolders []SharedFolderInfo `json:"sharedFolders,omitempty"`
 }
 
 type ModelInfo struct {
@@ -204,10 +205,32 @@ type GetTaskDetailPayload struct {
 }
 
 type GetTaskDetailResultPayload struct {
-	Task        MissionTaskInfo  `json:"task"`
-	Outputs     []TaskOutputInfo `json:"outputs"`
-	Sessions    []SessionInfoDTO `json:"sessions"`
-	ToolResults []ToolResultDTO  `json:"toolResults"`
+	Task         MissionTaskInfo   `json:"task"`
+	Outputs      []TaskOutputInfo  `json:"outputs"`
+	Sessions     []SessionInfoDTO  `json:"sessions"`
+	ToolResults  []ToolResultDTO   `json:"toolResults"`
+	Subtasks     []SubtaskInfo     `json:"subtasks"`
+	Inputs       []TaskInputInfo   `json:"inputs"`
+	DatasetItems []DatasetItemInfo `json:"datasetItems,omitempty"`
+}
+
+type TaskInputInfo struct {
+	IterationIndex *int   `json:"iterationIndex,omitempty"`
+	Objective      string `json:"objective"`
+}
+
+type DatasetItemInfo struct {
+	Index    int    `json:"index"`
+	ItemJSON string `json:"itemJson"`
+}
+
+type SubtaskInfo struct {
+	Index          int     `json:"index"`
+	Title          string  `json:"title"`
+	Status         string  `json:"status"` // pending, in_progress, completed
+	SessionID      string  `json:"sessionId"`
+	IterationIndex *int    `json:"iterationIndex,omitempty"`
+	CompletedAt    *string `json:"completedAt,omitempty"`
 }
 
 type ToolResultDTO struct {
@@ -215,6 +238,7 @@ type ToolResultDTO struct {
 	SessionID   string `json:"sessionId"`
 	ToolName    string `json:"toolName"`
 	InputParams string `json:"inputParams,omitempty"`
+	Output      string `json:"output,omitempty"`
 	StartedAt   string `json:"startedAt"`
 	FinishedAt  string `json:"finishedAt"`
 }
@@ -281,7 +305,6 @@ type MissionTaskInfo struct {
 	ConfigJSON string  `json:"configJson,omitempty"`
 	StartedAt  *string `json:"startedAt,omitempty"`
 	FinishedAt *string `json:"finishedAt,omitempty"`
-	Summary    *string `json:"summary,omitempty"`
 	OutputJSON *string `json:"outputJson,omitempty"`
 	Error      *string `json:"error,omitempty"`
 }
@@ -293,7 +316,6 @@ type TaskOutputInfo struct {
 	DatasetIndex *int    `json:"datasetIndex,omitempty"`
 	ItemID       *string `json:"itemId,omitempty"`
 	OutputJSON   string  `json:"outputJson"`
-	Summary      string  `json:"summary"`
 	CreatedAt    string  `json:"createdAt"`
 }
 
@@ -457,6 +479,127 @@ type ValidateConfigPayload struct {
 type ValidateConfigResultPayload struct {
 	Valid  bool     `json:"valid"`
 	Errors []string `json:"errors,omitempty"`
+}
+
+// =============================================================================
+// Variable operations
+// =============================================================================
+
+type VariableDetail struct {
+	Name     string `json:"name"`
+	Secret   bool   `json:"secret"`
+	Value    string `json:"value"`             // full value (non-secret) or masked (secret)
+	HasValue bool   `json:"hasValue"`           // true if a value is resolved
+	Default  string `json:"default,omitempty"`  // HCL default value
+	Source   string `json:"source"`             // "override", "default", or "unset"
+}
+
+type GetVariablesPayload struct{}
+
+type GetVariablesResultPayload struct {
+	Variables []VariableDetail `json:"variables"`
+}
+
+type SetVariablePayload struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type SetVariableResultPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+type DeleteVariablePayload struct {
+	Name string `json:"name"`
+}
+
+type DeleteVariableResultPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// =============================================================================
+// Shared folder operations
+// =============================================================================
+
+type SharedFolderInfo struct {
+	Name        string   `json:"name"`
+	Path        string   `json:"path"`
+	Label       string   `json:"label"`
+	Description string   `json:"description,omitempty"`
+	Editable    bool     `json:"editable"`
+	IsShared    bool     `json:"isShared"`
+	Missions    []string `json:"missions,omitempty"`
+}
+
+type ListSharedFoldersPayload struct{}
+
+type ListSharedFoldersResultPayload struct {
+	Folders []SharedFolderInfo `json:"folders"`
+}
+
+type BrowseDirectoryPayload struct {
+	BrowserName string `json:"browserName"`
+	RelPath     string `json:"relPath"`
+}
+
+type BrowseEntryInfo struct {
+	Name    string `json:"name"`
+	IsDir   bool   `json:"isDir"`
+	Size    int64  `json:"size"`
+	ModTime string `json:"modTime"`
+}
+
+type BrowseDirectoryResultPayload struct {
+	BrowserName string            `json:"browserName"`
+	RelPath     string            `json:"relPath"`
+	Entries     []BrowseEntryInfo `json:"entries"`
+}
+
+type ReadBrowseFilePayload struct {
+	BrowserName string `json:"browserName"`
+	RelPath     string `json:"relPath"`
+}
+
+type ReadBrowseFileResultPayload struct {
+	BrowserName string `json:"browserName"`
+	RelPath     string `json:"relPath"`
+	Content     string `json:"content"`
+	Size        int64  `json:"size"`
+	IsBinary    bool   `json:"isBinary"`
+}
+
+type WriteBrowseFilePayload struct {
+	BrowserName string `json:"browserName"`
+	RelPath     string `json:"relPath"`
+	Content     string `json:"content"`
+}
+
+type WriteBrowseFileResultPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+type DownloadFilePayload struct {
+	BrowserName string `json:"browserName"`
+	RelPath     string `json:"relPath"`
+}
+
+type DownloadFileResultPayload struct {
+	Content     string `json:"content"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+}
+
+type DownloadDirectoryPayload struct {
+	BrowserName string `json:"browserName"`
+	RelPath     string `json:"relPath"`
+}
+
+type DownloadDirectoryResultPayload struct {
+	Content  string `json:"content"`
+	Filename string `json:"filename"`
 }
 
 // =============================================================================

@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   ReactFlow,
@@ -15,13 +15,14 @@ import dagre from 'dagre';
 import '@xyflow/react/dist/style.css';
 import { ChevronsDown, ChevronsUp, Repeat } from 'lucide-react';
 
-import { getInstance, getMissionHistory } from '@/api/client';
+import { getInstance, getMissionHistory, runMission } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { useResizablePanel } from '@/hooks/use-resizable-panel';
 import { ZoomControls } from '@/components/zoom-controls';
+import { RunMissionDialog } from '@/components/RunMissionDialog';
 import type { TaskInfo, AgentInfo, MissionInputInfo, DatasetInfo, MissionInfo } from '@/api/types';
 
 const NODE_WIDTH = 260;
@@ -479,10 +480,13 @@ function AgentsTabContent({
 
 export function MissionDetail() {
   const { id, name } = useParams<{ id: string; name: string }>();
+  const navigate = useNavigate();
   const [selectedTask, setSelectedTask] = useState<TaskInfo | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<DatasetInfo | null>(null);
   const [activeTab, setActiveTab] = useState('general');
+  const [runningMission, setRunningMission] = useState(false);
+  const [showRunDialog, setShowRunDialog] = useState(false);
 
   const {
     panelHeight,
@@ -539,6 +543,21 @@ export function MissionDetail() {
     if (!selectedDataset && mission?.datasets?.length) setSelectedDataset(mission.datasets[0]);
   }, [mission?.datasets, selectedDataset]);
 
+  const handleRun = async () => {
+    if (!id || !name || !mission) return;
+    if (mission.inputs && mission.inputs.length > 0) {
+      setShowRunDialog(true);
+      return;
+    }
+    setRunningMission(true);
+    try {
+      const result = await runMission(id, name, {});
+      navigate(`/instances/${id}/runs/${result.missionId}`);
+    } catch {
+      setRunningMission(false);
+    }
+  };
+
   const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
     const task = mission?.tasks?.find((t) => t.name === node.id);
     if (task) {
@@ -570,16 +589,11 @@ export function MissionDetail() {
               </Button>
             )}
             <Button
-              asChild
               variant={instance.connected ? 'default' : 'secondary'}
-              disabled={!instance.connected}
+              disabled={!instance.connected || runningMission}
+              onClick={handleRun}
             >
-              <Link
-                to={`/instances/${id}/missions/${name}/run`}
-                className={!instance.connected ? 'pointer-events-none' : ''}
-              >
-                Run Mission
-              </Link>
+              {runningMission ? 'Starting...' : 'Run Mission'}
             </Button>
           </div>
         </div>
@@ -685,6 +699,15 @@ export function MissionDetail() {
           </div>
         </Tabs>
       </div>
+
+      {mission && (
+        <RunMissionDialog
+          instanceId={id!}
+          mission={mission}
+          open={showRunDialog}
+          onOpenChange={setShowRunDialog}
+        />
+      )}
     </div>
   );
 }

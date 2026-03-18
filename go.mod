@@ -4,7 +4,7 @@ go 1.23.0
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	github.com/mlund01/squadron-sdk v0.0.4
+	github.com/mlund01/squadron-sdk v0.0.22
 )
 
 replace github.com/mlund01/squadron-sdk => ../squadron-sdk

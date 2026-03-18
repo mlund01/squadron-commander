@@ -7,11 +7,13 @@ import { MissionsPage } from './pages/MissionsPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { PluginsPage } from './pages/PluginsPage'
 import { MissionDetail } from './pages/MissionDetail'
-import { MissionRun } from './pages/MissionRun'
 import { MissionHistory } from './pages/MissionHistory'
 import { MissionInstanceDetail } from './pages/MissionInstanceDetail'
 import { AgentDetail } from './pages/AgentDetail'
 import { ConfigPage } from './pages/ConfigPage'
+import { FileBrowserPage } from './pages/FileBrowserPage'
+import { FileViewerPage } from './pages/FileViewerPage'
+import { VariablesPage } from './pages/VariablesPage'
 
 function App() {
   return (
@@ -27,9 +29,11 @@ function App() {
         <Route path="plugins" element={<PluginsPage />} />
         <Route path="history" element={<MissionHistory />} />
         <Route path="missions/:name" element={<MissionDetail />} />
-        <Route path="missions/:name/run" element={<MissionRun />} />
         <Route path="runs/:mid" element={<MissionInstanceDetail />} />
         <Route path="config" element={<ConfigPage />} />
+        <Route path="variables" element={<VariablesPage />} />
+        <Route path="files" element={<FileBrowserPage />} />
+        <Route path="files/view" element={<FileViewerPage />} />
       </Route>
     </Routes>
     </ThemeProvider>

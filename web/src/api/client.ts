@@ -1,4 +1,4 @@
-import type { InstanceState, InstanceConfig, MissionHistoryResponse, RunMissionResponse, ChatMessageResponse, ChatHistoryResponse, ChatMessagesResponse, ReloadConfigResponse, GetMissionDetailResponse, GetMissionEventsResponse, TaskDetailResponse, GetDatasetsResponse, GetDatasetItemsResponse, ListConfigFilesResponse, GetConfigFileResponse, WriteConfigFileResponse, ValidateConfigResponse } from './types';
+import type { InstanceState, InstanceConfig, MissionHistoryResponse, RunMissionResponse, ChatMessageResponse, ChatHistoryResponse, ChatMessagesResponse, ReloadConfigResponse, GetMissionDetailResponse, GetMissionEventsResponse, TaskDetailResponse, GetDatasetsResponse, GetDatasetItemsResponse, ListConfigFilesResponse, GetConfigFileResponse, WriteConfigFileResponse, ValidateConfigResponse, ListSharedFoldersResponse, BrowseDirectoryResponse, ReadBrowseFileResponse, WriteBrowseFileResponse, GetVariablesResponse } from './types';
 
 const BASE_URL = '/api';
 
@@ -101,4 +101,52 @@ export async function validateConfig(instanceId: string, files: Record<string, s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ files }),
   });
+}
+
+// Variables API
+
+export async function getVariables(instanceId: string): Promise<GetVariablesResponse> {
+  return fetchJSON<GetVariablesResponse>(`/instances/${instanceId}/variables`);
+}
+
+export async function setVariable(instanceId: string, name: string, value: string): Promise<void> {
+  await fetchJSON(`/instances/${instanceId}/variables/${name}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function deleteVariable(instanceId: string, name: string): Promise<void> {
+  await fetchJSON(`/instances/${instanceId}/variables/${name}`, { method: 'DELETE' });
+}
+
+// Shared folder API
+
+export async function listSharedFolders(instanceId: string): Promise<ListSharedFoldersResponse> {
+  return fetchJSON<ListSharedFoldersResponse>(`/instances/${instanceId}/browsers`);
+}
+
+export async function browseDirectory(instanceId: string, browser: string, relPath: string): Promise<BrowseDirectoryResponse> {
+  return fetchJSON<BrowseDirectoryResponse>(`/instances/${instanceId}/browsers/${browser}/browse?path=${encodeURIComponent(relPath)}`);
+}
+
+export async function readBrowseFile(instanceId: string, browser: string, relPath: string): Promise<ReadBrowseFileResponse> {
+  return fetchJSON<ReadBrowseFileResponse>(`/instances/${instanceId}/browsers/${browser}/read?path=${encodeURIComponent(relPath)}`);
+}
+
+export async function writeBrowseFile(instanceId: string, browser: string, relPath: string, content: string): Promise<WriteBrowseFileResponse> {
+  return fetchJSON<WriteBrowseFileResponse>(`/instances/${instanceId}/browsers/${browser}/write?path=${encodeURIComponent(relPath)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function getDownloadFileUrl(instanceId: string, browser: string, relPath: string): string {
+  return `${BASE_URL}/instances/${instanceId}/browsers/${browser}/download?path=${encodeURIComponent(relPath)}`;
+}
+
+export function getDownloadDirUrl(instanceId: string, browser: string, relPath: string): string {
+  return `${BASE_URL}/instances/${instanceId}/browsers/${browser}/download-dir?path=${encodeURIComponent(relPath)}`;
 }

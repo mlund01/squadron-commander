@@ -32,6 +32,19 @@ func RegisterRoutes(mux *http.ServeMux, h *hub.Hub) {
 	mux.HandleFunc("GET /api/instances/{id}/missions/{mid}/datasets", handleGetDatasets(h))
 	mux.HandleFunc("GET /api/instances/{id}/datasets/{did}/items", handleGetDatasetItems(h))
 
+	// Shared folder endpoints
+	mux.HandleFunc("GET /api/instances/{id}/browsers", handleListSharedFolders(h))
+	mux.HandleFunc("GET /api/instances/{id}/browsers/{browser}/browse", handleBrowseDirectory(h))
+	mux.HandleFunc("GET /api/instances/{id}/browsers/{browser}/read", handleReadBrowseFile(h))
+	mux.HandleFunc("PUT /api/instances/{id}/browsers/{browser}/write", handleWriteBrowseFile(h))
+	mux.HandleFunc("GET /api/instances/{id}/browsers/{browser}/download", handleDownloadFile(h))
+	mux.HandleFunc("GET /api/instances/{id}/browsers/{browser}/download-dir", handleDownloadDirectory(h))
+
+	// Variable operations
+	mux.HandleFunc("GET /api/instances/{id}/variables", handleGetVariables(h))
+	mux.HandleFunc("PUT /api/instances/{id}/variables/{name}", handleSetVariable(h))
+	mux.HandleFunc("DELETE /api/instances/{id}/variables/{name}", handleDeleteVariable(h))
+
 	// Agent chat endpoints
 	mux.HandleFunc("POST /api/instances/{id}/agents/{name}/chat", handleChatMessage(h))
 	mux.HandleFunc("GET /api/instances/{id}/chat/{sessionId}/events", handleChatEvents(h))

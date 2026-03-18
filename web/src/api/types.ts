@@ -17,6 +17,7 @@ export interface InstanceConfig {
   missions: MissionInfo[];
   plugins: PluginInfo[];
   variables: VariableInfo[];
+  sharedFolders?: SharedFolderInfo[];
 }
 
 export interface ModelInfo {
@@ -112,6 +113,19 @@ export interface VariableInfo {
   secret: boolean;
 }
 
+export interface VariableDetail {
+  name: string;
+  secret: boolean;
+  value: string;
+  hasValue: boolean;
+  default?: string;
+  source: 'override' | 'default' | 'unset';
+}
+
+export interface GetVariablesResponse {
+  variables: VariableDetail[];
+}
+
 export interface MissionRecordInfo {
   id: string;
   name: string;
@@ -186,7 +200,6 @@ export interface MissionTaskRecord {
   configJson?: string;
   startedAt?: string;
   finishedAt?: string;
-  summary?: string;
   outputJson?: string;
   error?: string;
 }
@@ -230,7 +243,6 @@ export interface TaskOutputInfo {
   datasetIndex?: number;
   itemId?: string;
   outputJson: string;
-  summary: string;
   createdAt: string;
 }
 
@@ -239,8 +251,28 @@ export interface ToolResultDTO {
   sessionId: string;
   toolName: string;
   inputParams?: string;
+  output?: string;
   startedAt: string;
   finishedAt: string;
+}
+
+export interface SubtaskInfo {
+  index: number;
+  title: string;
+  status: string; // pending, in_progress, completed
+  sessionId: string;
+  iterationIndex?: number;
+  completedAt?: string;
+}
+
+export interface TaskInputInfo {
+  iterationIndex?: number;
+  objective: string;
+}
+
+export interface DatasetItemInfo {
+  index: number;
+  itemJson: string;
 }
 
 export interface TaskDetailResponse {
@@ -248,6 +280,9 @@ export interface TaskDetailResponse {
   outputs: TaskOutputInfo[];
   sessions: SessionInfoDTO[];
   toolResults: ToolResultDTO[];
+  subtasks: SubtaskInfo[];
+  inputs: TaskInputInfo[];
+  datasetItems?: DatasetItemInfo[];
 }
 
 export interface DatasetRecordInfo {
@@ -290,4 +325,46 @@ export interface WriteConfigFileResponse {
 export interface ValidateConfigResponse {
   valid: boolean;
   errors?: string[];
+}
+
+// Shared folder types
+
+export interface SharedFolderInfo {
+  name: string;
+  path: string;
+  label: string;
+  description?: string;
+  editable: boolean;
+  isShared: boolean;
+  missions?: string[];
+}
+
+export interface BrowseEntryInfo {
+  name: string;
+  isDir: boolean;
+  size: number;
+  modTime: string;
+}
+
+export interface BrowseDirectoryResponse {
+  browserName: string;
+  relPath: string;
+  entries: BrowseEntryInfo[];
+}
+
+export interface ReadBrowseFileResponse {
+  browserName: string;
+  relPath: string;
+  content: string;
+  size: number;
+  isBinary: boolean;
+}
+
+export interface WriteBrowseFileResponse {
+  success: boolean;
+  error?: string;
+}
+
+export interface ListSharedFoldersResponse {
+  folders: SharedFolderInfo[];
 }

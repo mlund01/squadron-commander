@@ -69,6 +69,28 @@ const (
 	TypeValidateConfig        MessageType = "validate_config"
 	TypeValidateConfigResult  MessageType = "validate_config_result"
 
+	// Variable operations
+	TypeGetVariables             MessageType = "get_variables"
+	TypeGetVariablesResult       MessageType = "get_variables_result"
+	TypeSetVariable              MessageType = "set_variable"
+	TypeSetVariableResult        MessageType = "set_variable_result"
+	TypeDeleteVariable           MessageType = "delete_variable"
+	TypeDeleteVariableResult     MessageType = "delete_variable_result"
+
+	// Shared folder operations
+	TypeListSharedFolders        MessageType = "list_shared_folders"
+	TypeListSharedFoldersResult  MessageType = "list_shared_folders_result"
+	TypeBrowseDirectory         MessageType = "browse_directory"
+	TypeBrowseDirectoryResult   MessageType = "browse_directory_result"
+	TypeReadBrowseFile          MessageType = "read_browse_file"
+	TypeReadBrowseFileResult    MessageType = "read_browse_file_result"
+	TypeWriteBrowseFile         MessageType = "write_browse_file"
+	TypeWriteBrowseFileResult   MessageType = "write_browse_file_result"
+	TypeDownloadFile            MessageType = "download_file"
+	TypeDownloadFileResult      MessageType = "download_file_result"
+	TypeDownloadDirectory       MessageType = "download_directory"
+	TypeDownloadDirectoryResult MessageType = "download_directory_result"
+
 	// Error
 	TypeError MessageType = "error"
 )

@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getInstance } from '@/api/client';
+import { useParams, useNavigate } from 'react-router-dom';
+import { getInstance, runMission } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -11,16 +12,35 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { RunMissionDialog } from '@/components/RunMissionDialog';
+import type { MissionInfo } from '@/api/types';
 
 export function MissionsPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [runningMission, setRunningMission] = useState<string | null>(null);
+  const [dialogMission, setDialogMission] = useState<MissionInfo | null>(null);
   const { data: instance, isLoading } = useQuery({
     queryKey: ['instance', id],
     queryFn: () => getInstance(id!),
     enabled: !!id,
     refetchInterval: 5000,
   });
+
+  const handleRun = async (mission: MissionInfo) => {
+    if (!id) return;
+    if (mission.inputs && mission.inputs.length > 0) {
+      setDialogMission(mission);
+      return;
+    }
+    setRunningMission(mission.name);
+    try {
+      const result = await runMission(id, mission.name, {});
+      navigate(`/instances/${id}/runs/${result.missionId}`);
+    } catch {
+      setRunningMission(null);
+    }
+  };
 
   if (isLoading) return <div className="p-8 text-muted-foreground">Loading...</div>;
   if (!instance) return <div className="p-8 text-muted-foreground">Instance not found</div>;
@@ -65,17 +85,12 @@ export function MissionsPage() {
                   </TableCell>
                   <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                     <Button
-                      asChild
                       size="sm"
                       variant={instance.connected ? 'default' : 'secondary'}
-                      disabled={!instance.connected}
+                      disabled={!instance.connected || runningMission === m.name}
+                      onClick={() => handleRun(m)}
                     >
-                      <Link
-                        to={`/instances/${id}/missions/${m.name}/run`}
-                        className={!instance.connected ? 'pointer-events-none' : ''}
-                      >
-                        Run
-                      </Link>
+                      {runningMission === m.name ? 'Starting...' : 'Run'}
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -83,6 +98,14 @@ export function MissionsPage() {
             </TableBody>
           </Table>
         </div>
+      )}
+      {dialogMission && (
+        <RunMissionDialog
+          instanceId={id!}
+          mission={dialogMission}
+          open={!!dialogMission}
+          onOpenChange={(open) => { if (!open) setDialogMission(null); }}
+        />
       )}
     </div>
   );

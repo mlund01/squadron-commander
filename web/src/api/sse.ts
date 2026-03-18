@@ -36,7 +36,7 @@ export function subscribeMissionEvents(
     'iteration_started', 'iteration_completed', 'iteration_failed', 'iteration_retrying',
     'commander_reasoning', 'commander_answer', 'commander_calling_tool', 'commander_tool_complete',
     'agent_started', 'agent_completed', 'agent_thinking', 'agent_calling_tool', 'agent_tool_complete', 'agent_answer',
-    'summary_aggregation',
+    'compaction',
   ];
 
   for (const type of eventTypes) {

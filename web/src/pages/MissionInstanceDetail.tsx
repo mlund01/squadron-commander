@@ -24,7 +24,8 @@ import { cn } from '@/lib/utils';
 import { StatusBadge, formatTime, formatDuration } from '@/lib/mission-utils';
 import { useResizablePanel } from '@/hooks/use-resizable-panel';
 import { ZoomControls } from '@/components/zoom-controls';
-import type { TaskInfo, MissionEvent, MissionTaskRecord, ToolResultDTO } from '@/api/types';
+import type { TaskInfo, MissionEvent, MissionTaskRecord, ToolResultDTO, TaskOutputInfo, SubtaskInfo, DatasetItemInfo } from '@/api/types';
+
 
 const NODE_WIDTH = 260;
 const NODE_HEIGHT = 100;
@@ -32,7 +33,7 @@ const NODE_HEIGHT = 100;
 /* ── Status-aware task node for run view ── */
 
 function RunTaskNode({ data, selected }: { data: Record<string, unknown>; selected?: boolean }) {
-  const task = data as unknown as TaskInfo & { runStatus?: string; runSummary?: string; runError?: string };
+  const task = data as unknown as TaskInfo & { runStatus?: string; runError?: string };
   const isIterated = !!task.iterator;
   const status = task.runStatus ?? 'pending';
 
@@ -80,9 +81,6 @@ function RunTaskNode({ data, selected }: { data: Record<string, unknown>; select
             </div>
           )}
         </div>
-        {status === 'completed' && task.runSummary && (
-          <p className="text-xs text-muted-foreground line-clamp-2">{task.runSummary}</p>
-        )}
         {status === 'failed' && task.runError && (
           <p className="text-xs text-red-500 line-clamp-2">{task.runError}</p>
         )}
@@ -151,6 +149,7 @@ const VERBOSE_EVENTS = new Set([
 ]);
 
 function getEventBg(eventType: string): string {
+  if (eventType === 'compaction') return 'bg-purple-500/10';
   if (eventType.includes('failed')) return 'bg-red-500/10';
   if (eventType.includes('completed')) return 'bg-green-500/10';
   if (eventType.includes('started')) return 'bg-blue-500/10';
@@ -164,7 +163,7 @@ function formatEventText(eventType: string, d: Record<string, unknown>): string 
     case 'mission_completed': return `Mission "${d.missionName}" completed`;
     case 'mission_failed': return `Mission failed: ${d.error}`;
     case 'task_started': return `Task "${d.taskName}" started`;
-    case 'task_completed': return `Task "${d.taskName}" completed${d.summary ? `: ${d.summary}` : ''}`;
+    case 'task_completed': return `Task "${d.taskName}" completed`;
     case 'task_failed': return `Task "${d.taskName}" failed: ${d.error}`;
     case 'agent_started': return `Agent "${d.agentName}" started for "${d.taskName}"`;
     case 'agent_completed': return `Agent "${d.agentName}" completed`;
@@ -175,7 +174,7 @@ function formatEventText(eventType: string, d: Record<string, unknown>): string 
     case 'iteration_started': return `Iteration ${d.index} started for "${d.taskName}"`;
     case 'iteration_completed': return `Iteration ${d.index} completed for "${d.taskName}"`;
     case 'iteration_failed': return `Iteration ${d.index} failed for "${d.taskName}"`;
-    case 'summary_aggregation': return `Aggregating ${d.summaryCount} summaries for "${d.taskName}"`;
+    case 'compaction': return `Context compacted (${d.entity}): ${d.inputTokens} tokens > ${d.tokenLimit} limit, ${d.messagesCompacted} msgs compacted`;
     default: return JSON.stringify(d);
   }
 }
@@ -234,7 +233,7 @@ function GeneralTab({ mission, tasks }: { mission: { name: string; status: strin
 
 /* ── Datasets Tab ── */
 
-function DatasetsTab({ instanceId, missionId }: { instanceId: string; missionId: string }) {
+function DatasetsTab({ instanceId, missionId, isRunning }: { instanceId: string; missionId: string; isRunning: boolean }) {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
@@ -242,6 +241,7 @@ function DatasetsTab({ instanceId, missionId }: { instanceId: string; missionId:
   const { data: datasetsData } = useQuery({
     queryKey: ['runDatasets', instanceId, missionId],
     queryFn: () => getRunDatasets(instanceId, missionId),
+    refetchInterval: isRunning ? 2000 : false,
   });
 
   const datasets = datasetsData?.datasets ?? [];
@@ -257,6 +257,7 @@ function DatasetsTab({ instanceId, missionId }: { instanceId: string; missionId:
     queryKey: ['datasetItems', instanceId, selectedDatasetId, page],
     queryFn: () => getDatasetItems(instanceId, selectedDatasetId!, page * PAGE_SIZE, PAGE_SIZE),
     enabled: !!selectedDatasetId,
+    refetchInterval: isRunning ? 2000 : false,
   });
 
   const items = useMemo(() => {
@@ -355,7 +356,7 @@ function DatasetsTab({ instanceId, missionId }: { instanceId: string; missionId:
 /* ── Tasks Tab (Gantt + Session Detail) ── */
 
 type PanelSelection =
-  | { type: 'session'; sessionId: string }
+  | { type: 'session'; sessionId: string; agentName?: string }
   | { type: 'tool'; toolResult: ToolResultDTO }
   | null;
 
@@ -364,7 +365,7 @@ interface GanttSpan {
   label: string;
   start: number;
   end: number;
-  category: 'commander' | 'agent' | 'tool';
+  category: 'commander' | 'agent' | 'tool' | 'dataset_next';
   sessionId?: string;
   toolResult?: ToolResultDTO;
 }
@@ -373,13 +374,122 @@ const SPAN_COLORS: Record<GanttSpan['category'], string> = {
   commander: 'bg-purple-500',
   agent: 'bg-blue-500',
   tool: 'bg-teal-500',
+  dataset_next: 'bg-amber-500',
 };
 
-function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks: MissionTaskRecord[]; missionId: string }) {
+function IterationBar({
+  iterations,
+  selectedIteration,
+  onSelectIteration,
+  onSelectAll,
+  datasetItems,
+  borderTop,
+}: {
+  iterations: number[];
+  selectedIteration: number | null;
+  onSelectIteration: (idx: number) => void;
+  onSelectAll?: () => void;
+  datasetItems: DatasetItemInfo[];
+  borderTop?: boolean;
+}) {
+  // Build pagination pages: show all if <= 9, otherwise [1] ... [sel-1] [sel] [sel+1] ... [N]
+  const pages = useMemo(() => {
+    const n = iterations.length;
+    if (n <= 9) return iterations;
+    const sel = selectedIteration ?? iterations[0];
+    const first = iterations[0];
+    const last = iterations[n - 1];
+    const result: (number | 'ellipsis')[] = [];
+    const nearby = new Set<number>();
+    nearby.add(first);
+    nearby.add(last);
+    for (let d = -1; d <= 1; d++) {
+      const v = sel + d;
+      if (iterations.includes(v)) nearby.add(v);
+    }
+    const sorted = Array.from(nearby).sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i++) {
+      if (i > 0 && sorted[i] - sorted[i - 1] > 1) result.push('ellipsis');
+      result.push(sorted[i]);
+    }
+    return result;
+  }, [iterations, selectedIteration]);
+
+  return (
+    <div className={cn(
+      'flex items-center gap-2 px-4 py-1.5 bg-muted/20 shrink-0 overflow-x-auto',
+      borderTop ? 'border-t border-border/50' : 'border-b border-border/50'
+    )}>
+      <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider shrink-0">
+        Iteration
+      </span>
+      <div className="flex items-center gap-0.5">
+        {onSelectAll && (
+          <button
+            onClick={onSelectAll}
+            className={cn(
+              'min-w-[28px] px-2 py-0.5 rounded text-xs font-medium transition-colors mr-0.5',
+              selectedIteration === null
+                ? 'bg-foreground text-background'
+                : 'bg-muted hover:bg-muted/80 text-foreground'
+            )}
+          >
+            All
+          </button>
+        )}
+        {pages.map((page, i) => {
+          if (page === 'ellipsis') {
+            return <span key={`e${i}`} className="px-1 text-xs text-muted-foreground">&hellip;</span>;
+          }
+          const isActive = page === selectedIteration;
+          return (
+            <button
+              key={page}
+              onClick={() => onSelectIteration(page)}
+              className={cn(
+                'min-w-[28px] px-2 py-0.5 rounded text-xs font-medium transition-colors',
+                isActive
+                  ? 'bg-foreground text-background'
+                  : 'bg-muted hover:bg-muted/80 text-foreground'
+              )}
+            >
+              {page + 1}
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedIteration != null && datasetItems.length > 0 && (() => {
+        const item = datasetItems.find(d => d.index === selectedIteration);
+        if (!item) return null;
+        let parsed: Record<string, unknown>;
+        try { parsed = JSON.parse(item.itemJson); } catch { return null; }
+        const entries = Object.entries(parsed);
+        const preview = entries.slice(0, 4);
+
+        return (
+          <div className="flex items-center gap-3 ml-1 pl-3 border-l border-border/50 text-[11px] text-muted-foreground shrink-0">
+            {preview.map(([key, val]) => (
+              <span key={key}>
+                <span className="font-medium">{key}:</span>{' '}
+                <span className="text-foreground">{String(val)}</span>
+              </span>
+            ))}
+            {entries.length > 4 && (
+              <span className="text-muted-foreground/50">+{entries.length - 4}</span>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function TasksTab({ instanceId, tasks, missionId, isRunning }: { instanceId: string; tasks: MissionTaskRecord[]; missionId: string; isRunning: boolean }) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedIteration, setSelectedIteration] = useState<number | null>(null);
   const [selection, setSelection] = useState<PanelSelection>(null);
-  const [traceView, setTraceView] = useState<'detail' | 'flamegraph' | 'table'>('detail');
+  const [traceView, setTraceView] = useState<'detail' | 'subtasks' | 'output' | 'iterations' | 'flamegraph' | 'table'>('detail');
   const [collapsedRows, setCollapsedRows] = useState<Set<string>>(new Set());
 
   const selectedSessionId = selection?.type === 'session' ? selection.sessionId : null;
@@ -395,12 +505,14 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
     queryKey: ['taskDetail', instanceId, selectedTaskId],
     queryFn: () => getTaskDetail(instanceId, selectedTaskId!),
     enabled: !!selectedTaskId,
+    refetchInterval: isRunning ? 2000 : false,
   });
 
   // Events for gantt + detail
   const { data: missionEventsData } = useQuery({
     queryKey: ['missionEvents', instanceId, missionId],
     queryFn: () => getMissionEvents(instanceId, missionId),
+    refetchInterval: isRunning ? 2000 : false,
   });
 
   // Messages for selected session
@@ -413,16 +525,35 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
   const allSessions = taskDetail?.sessions ?? [];
   const selectedTask = tasks.find(t => t.id === selectedTaskId);
 
-  // Detect iterations
-  const iterations = useMemo(() => {
-    const indices = new Set<number>();
+  // Detect iterations from sessions (parallel) or inputs (sequential)
+  const { iterations, isIterated, isParallelIteration } = useMemo(() => {
+    // Parallel iterations: each iteration gets its own session with iterationIndex
+    const sessionIndices = new Set<number>();
     for (const s of allSessions) {
-      if (s.iterationIndex != null) indices.add(s.iterationIndex);
+      if (s.iterationIndex != null) sessionIndices.add(s.iterationIndex);
     }
-    return Array.from(indices).sort((a, b) => a - b);
-  }, [allSessions]);
+    const isParallel = sessionIndices.size > 0;
 
-  const isIterated = iterations.length > 0;
+    if (isParallel) {
+      const sorted = Array.from(sessionIndices).sort((a, b) => a - b);
+      return { iterations: sorted, isIterated: sorted.length > 0, isParallelIteration: true };
+    }
+
+    // Sequential iterations: single session, but subtasks/outputs/datasetItems have iteration indices
+    const seqIndices = new Set<number>();
+    for (const st of (taskDetail?.subtasks ?? [])) {
+      if (st.iterationIndex != null) seqIndices.add(st.iterationIndex);
+    }
+    for (const o of (taskDetail?.outputs ?? [])) {
+      if (o.datasetIndex != null) seqIndices.add(o.datasetIndex);
+    }
+    // Also use datasetItems as a signal (they always have sequential indices)
+    for (const di of (taskDetail?.datasetItems ?? [])) {
+      seqIndices.add(di.index);
+    }
+    const sorted = Array.from(seqIndices).sort((a, b) => a - b);
+    return { iterations: sorted, isIterated: sorted.length > 0, isParallelIteration: false };
+  }, [allSessions, taskDetail?.subtasks, taskDetail?.outputs, taskDetail?.datasetItems]);
 
   useEffect(() => {
     if (isIterated) {
@@ -433,25 +564,35 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
   }, [selectedTaskId, isIterated, iterations]);
 
   const sessions = useMemo(() => {
-    if (!isIterated || selectedIteration == null) return allSessions;
+    if (!isParallelIteration || selectedIteration == null) return allSessions;
     return allSessions.filter(s => s.iterationIndex === selectedIteration);
-  }, [allSessions, isIterated, selectedIteration]);
+  }, [allSessions, isParallelIteration, selectedIteration]);
 
-  // Gantt time range from visible sessions
+  // Tool results from API, filtered by iteration
+  const allToolResults = taskDetail?.toolResults ?? [];
+
+  // Gantt time range from all sessions and tool results
   const { ganttStart, ganttEnd, ganttDuration } = useMemo(() => {
-    if (sessions.length === 0) return { ganttStart: 0, ganttEnd: 0, ganttDuration: 1 };
+    if (allSessions.length === 0) return { ganttStart: 0, ganttEnd: 0, ganttDuration: 1 };
     let earliest = Infinity;
     let latest = 0;
-    for (const s of sessions) {
+    for (const s of allSessions) {
       const start = new Date(s.startedAt).getTime();
       const end = s.finishedAt ? new Date(s.finishedAt).getTime() : Date.now();
       if (start < earliest) earliest = start;
       if (end > latest) latest = end;
     }
+    // Extend bounds to include tool results that fall outside session timestamps
+    for (const tr of allToolResults) {
+      const s = new Date(tr.startedAt).getTime();
+      const e = new Date(tr.finishedAt).getTime();
+      if (s < earliest) earliest = s;
+      if (e > latest) latest = e;
+    }
     return { ganttStart: earliest, ganttEnd: latest, ganttDuration: Math.max(latest - earliest, 1) };
-  }, [sessions]);
+  }, [allSessions, allToolResults]);
 
-  // Parse events for this task within current gantt range
+  // Parse events for this task (always include all iterations for flame graph)
   const taskEvents = useMemo(() => {
     if (!missionEventsData?.events || !selectedTask) return [];
     return missionEventsData.events
@@ -462,17 +603,75 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
       })
       .filter(e => {
         const evtTaskName = String(e.data.taskName || '');
-        // For iterated tasks, event taskName is "write_story[0]", selectedTask is "write_story"
-        if (isIterated && selectedIteration != null) {
-          return evtTaskName === `${selectedTask.taskName}[${selectedIteration}]`
-            || (evtTaskName === selectedTask.taskName && e.time >= ganttStart - 1000 && e.time <= ganttEnd + 1000);
-        }
-        return evtTaskName === selectedTask.taskName;
+        const baseName = selectedTask.taskName;
+        // Match exact name or iteration pattern (e.g. "task[0]")
+        return evtTaskName === baseName || evtTaskName.startsWith(baseName + '[');
       });
-  }, [missionEventsData, selectedTask, isIterated, selectedIteration, ganttStart, ganttEnd]);
+  }, [missionEventsData, selectedTask]);
 
-  // Tool results from API (replaces event-based tool call reconstruction)
-  const toolResults = taskDetail?.toolResults ?? [];
+  // Session IDs for current iteration (used to filter tool results, subtasks, etc.)
+  const iterationSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
+
+  const toolResults = useMemo(() => {
+    if (!isIterated || selectedIteration == null) return allToolResults;
+    if (!isParallelIteration) {
+      // Sequential: partition by dataset_next boundaries
+      // Each dataset_next marks the start of an iteration
+      const boundaries: number[] = [];
+      for (let i = 0; i < allToolResults.length; i++) {
+        if (allToolResults[i].toolName === 'dataset_next') boundaries.push(i);
+      }
+      // Iteration N = from boundaries[N] (inclusive) to boundaries[N+1] (exclusive)
+      // If no dataset_next exists for iteration 0, it starts at index 0
+      const start = boundaries[selectedIteration] != null ? boundaries[selectedIteration] : (selectedIteration === 0 ? 0 : allToolResults.length);
+      const end = boundaries[selectedIteration + 1] != null ? boundaries[selectedIteration + 1] : allToolResults.length;
+      return allToolResults.slice(start, end);
+    }
+    return allToolResults.filter(tr => iterationSessionIds.has(tr.sessionId));
+  }, [allToolResults, isIterated, isParallelIteration, selectedIteration, iterationSessionIds]);
+
+  // Set of tool result IDs in the selected iteration (for table row highlighting)
+  const iterationToolResultIds = useMemo(() => {
+    if (!isIterated || selectedIteration == null) return null;
+    return new Set(toolResults.map(tr => tr.id));
+  }, [isIterated, selectedIteration, toolResults]);
+
+  // Compute iteration time range for flame graph highlight
+  const iterationTimeRange = useMemo(() => {
+    if (!isIterated || selectedIteration == null) return null;
+    if (toolResults.length === 0) return null;
+    let earliest = Infinity, latest = 0;
+    for (const tr of toolResults) {
+      const s = new Date(tr.startedAt).getTime();
+      const e = new Date(tr.finishedAt).getTime();
+      if (s < earliest) earliest = s;
+      if (e > latest) latest = e;
+    }
+    if (earliest === Infinity) return null;
+    return { start: earliest, end: latest };
+  }, [isIterated, selectedIteration, toolResults]);
+
+  // Subtasks filtered by iteration
+  const subtasks = useMemo(() => {
+    const all = taskDetail?.subtasks ?? [];
+    if (!isIterated || selectedIteration == null) {
+      // Sort by iterationIndex then index for temporal order
+      return [...all].sort((a, b) => (a.iterationIndex ?? 0) - (b.iterationIndex ?? 0) || a.index - b.index);
+    }
+    if (!isParallelIteration) {
+      // Sequential: filter by iterationIndex field
+      return all.filter(st => st.iterationIndex === selectedIteration);
+    }
+    // Parallel: filter by session
+    return all.filter(st => iterationSessionIds.has(st.sessionId));
+  }, [taskDetail?.subtasks, isIterated, isParallelIteration, selectedIteration, iterationSessionIds]);
+
+  // Outputs filtered by iteration
+  const outputs = useMemo(() => {
+    const all = taskDetail?.outputs ?? [];
+    if (!isIterated || selectedIteration == null) return all;
+    return all.filter(o => o.datasetIndex === selectedIteration);
+  }, [taskDetail?.outputs, isIterated, selectedIteration]);
 
   // Build a session ID → session lookup for agent name resolution
   const sessionMap = useMemo(() => {
@@ -483,10 +682,21 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
 
   // For call_agent tool results, find the agent session that ran during that window
   const findAgentSession = useCallback((tr: ToolResultDTO) => {
+    // Match by agent name from call_agent input params
+    if (tr.toolName === 'call_agent') {
+      try {
+        const parsed = JSON.parse(tr.inputParams || '{}');
+        if (parsed.name) {
+          const byName = allSessions.find(s => s.role !== 'commander' && s.agentName === parsed.name);
+          if (byName) return byName;
+        }
+      } catch { /* fall through */ }
+    }
+    // Fallback: time-based match
     const trStart = new Date(tr.startedAt).getTime();
     const trEnd = new Date(tr.finishedAt).getTime();
-    return sessions.find(s => s.role !== 'commander' && new Date(s.startedAt).getTime() >= trStart - 1000 && new Date(s.startedAt).getTime() <= trEnd);
-  }, [sessions]);
+    return allSessions.find(s => s.role !== 'commander' && new Date(s.startedAt).getTime() >= trStart - 1000 && new Date(s.startedAt).getTime() <= trEnd);
+  }, [allSessions]);
 
   // Gantt spans built from tool results
   // Line 1: Commander session (continuous bar)
@@ -496,7 +706,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
     const lines: GanttSpan[][] = [];
 
     // Line 1: Commander session
-    const cmdr = sessions.find(s => s.role === 'commander');
+    const cmdr = allSessions.find(s => s.role === 'commander');
     if (cmdr) {
       lines.push([{
         id: cmdr.id, label: 'commander',
@@ -506,8 +716,8 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
       }]);
     }
 
-    // Line 2: Commander's tool calls from tool results
-    const cmdrResults = toolResults.filter(tr => cmdr && tr.sessionId === cmdr.id);
+    // Line 2: Commander's tool calls from tool results (always show all)
+    const cmdrResults = allToolResults.filter(tr => cmdr && tr.sessionId === cmdr.id);
     if (cmdrResults.length > 0) {
       const line2: GanttSpan[] = cmdrResults.map(tr => {
         // call_agent: show as agent-colored span with agent name
@@ -528,7 +738,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
           id: tr.id, label: tr.toolName,
           start: new Date(tr.startedAt).getTime(),
           end: new Date(tr.finishedAt).getTime(),
-          category: 'tool' as const, toolResult: tr,
+          category: (tr.toolName === 'dataset_next' ? 'dataset_next' : 'tool') as GanttSpan['category'], toolResult: tr,
         };
       });
       line2.sort((a, b) => a.start - b.start);
@@ -536,9 +746,9 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
     }
 
     // Lines 3+: Agent tool calls, one line per agent session
-    const agentSessions = sessions.filter(s => s.role !== 'commander');
+    const agentSessions = allSessions.filter(s => s.role !== 'commander');
     for (const agentSession of agentSessions) {
-      const agentResults = toolResults.filter(tr => tr.sessionId === agentSession.id);
+      const agentResults = allToolResults.filter(tr => tr.sessionId === agentSession.id);
       if (agentResults.length > 0) {
         const line: GanttSpan[] = agentResults.map(tr => ({
           id: tr.id, label: tr.toolName,
@@ -552,7 +762,66 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
     }
 
     return lines;
-  }, [sessions, toolResults]);
+  }, [allSessions, allToolResults]);
+
+  // Reasoning ticks for flame graph: map spanId → array of { pct, time } within each session/agent span
+  const messageTicks = useMemo(() => {
+    const ticks = new Map<string, { pct: number; time: number }[]>();
+    const REASONING_EVENTS = new Set([
+      'commander_reasoning', 'agent_thinking',
+    ]);
+
+    for (const line of ganttLines) {
+      for (const span of line) {
+        if (span.category !== 'commander' && span.category !== 'agent') continue;
+        const spanDur = span.end - span.start;
+        if (spanDur <= 0) continue;
+
+        // Find matching session for this span
+        let sessionId: string | undefined;
+        if (span.sessionId) {
+          sessionId = span.sessionId;
+        } else if (span.toolResult?.toolName === 'call_agent') {
+          const agentSession = findAgentSession(span.toolResult);
+          if (agentSession) sessionId = agentSession.id;
+        }
+        if (!sessionId) continue;
+        const session = sessionMap.get(sessionId);
+        if (!session) continue;
+
+        const isCmd = session.role === 'commander';
+        const spanTicks: { pct: number; time: number }[] = [];
+
+        for (const evt of taskEvents) {
+          if (!REASONING_EVENTS.has(evt.eventType)) continue;
+          if (evt.time < span.start || evt.time > span.end) continue;
+          if (!isCmd && evt.data.agentName !== session.agentName) continue;
+
+          const pct = ((evt.time - span.start) / spanDur) * 100;
+          spanTicks.push({ pct, time: evt.time });
+        }
+
+        if (spanTicks.length > 0) {
+          // Deduplicate ticks that are too close together (< 0.5% apart)
+          spanTicks.sort((a, b) => a.pct - b.pct);
+          const deduped = [spanTicks[0]];
+          for (let i = 1; i < spanTicks.length; i++) {
+            if (spanTicks[i].pct - deduped[deduped.length - 1].pct > 0.5) {
+              deduped.push(spanTicks[i]);
+            }
+          }
+          ticks.set(span.id, deduped);
+        }
+      }
+    }
+    return ticks;
+  }, [ganttLines, taskEvents, sessionMap, findAgentSession]);
+
+  // State for scrolling to a specific activity event in the detail panel
+  const [scrollToActivityTime, setScrollToActivityTime] = useState<number | null>(null);
+  const [highlightedActivityIdx, setHighlightedActivityIdx] = useState<number | null>(null);
+  const [detailPanelTab, setDetailPanelTab] = useState<string>('activity');
+  const activityRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   // Session detail events (filter by time range + role matching)
   const sessionDetailEvents = useMemo(() => {
@@ -570,26 +839,15 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
 
     return taskEvents
       .filter(e => {
-        // Commander sessions also receive iteration_* events in iterated tasks
         const matchesRole = isCmd
-          ? (e.eventType.startsWith('commander_') || e.eventType.startsWith('iteration_'))
-          : (e.eventType.startsWith('agent_'));
+          ? e.eventType.startsWith('commander_')
+          : e.eventType.startsWith('agent_');
         if (!matchesRole) return false;
         if (!isCmd && e.data.agentName !== session.agentName) return false;
-        // For iterated tasks, filter events to the selected iteration
-        if (isIterated && selectedIteration != null) {
-          if (e.eventType.startsWith('iteration_')) {
-            // iteration_* events have a separate index field
-            if (e.data.index !== selectedIteration) return false;
-          } else {
-            // commander_*/agent_* events encode iteration in taskName (e.g. "write_story[0]")
-            if (iterTaskName && String(e.data.taskName || '') !== iterTaskName) return false;
-          }
-        }
         return e.time >= sStart && e.time <= sEnd;
       })
       .map(e => ({ eventType: e.eventType, data: e.data, timestamp: e.createdAt }));
-  }, [selectedSessionId, allSessions, taskEvents, isIterated, selectedIteration, selectedTask]);
+  }, [selectedSessionId, allSessions, taskEvents]);
 
   // Pre-compute tool call durations for session detail panel
   const toolDurations = useMemo(() => {
@@ -614,11 +872,35 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
     return durations;
   }, [sessionDetailEvents]);
 
+  // Scroll to activity event when a flame graph tick is clicked
+  useEffect(() => {
+    if (scrollToActivityTime == null || sessionDetailEvents.length === 0) return;
+    setDetailPanelTab('activity');
+    // Find closest event by timestamp
+    let closestIdx = 0;
+    let closestDiff = Infinity;
+    for (let i = 0; i < sessionDetailEvents.length; i++) {
+      const evtTime = new Date(sessionDetailEvents[i].timestamp).getTime();
+      const diff = Math.abs(evtTime - scrollToActivityTime);
+      if (diff < closestDiff) { closestDiff = diff; closestIdx = i; }
+    }
+    setHighlightedActivityIdx(closestIdx);
+    setTimeout(() => {
+      const el = activityRefs.current.get(closestIdx);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
+    // Clear highlight after 2s
+    setTimeout(() => setHighlightedActivityIdx(prev => prev === closestIdx ? null : prev), 2000);
+    setScrollToActivityTime(null);
+  }, [scrollToActivityTime, sessionDetailEvents]);
+
   // Zoom/pan state: zoom=1 means full view, panOffset=0..1 is left edge fraction
   const [zoom, setZoom] = useState(1);
   const [panOffset, setPanOffset] = useState(0);
   const ganttContainerRef = useRef<HTMLDivElement>(null);
-  const panDragRef = useRef<{ startX: number; startOffset: number } | null>(null);
+  const panDragRef = useRef<{ startX: number; startOffset: number; dragging: boolean; pointerId: number } | null>(null);
 
   // Reset zoom when switching tasks/iterations
   useEffect(() => {
@@ -639,12 +921,21 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
   const zoomRef = useRef({ zoom, viewStart, viewWidth });
   zoomRef.current = { zoom, viewStart, viewWidth };
 
-  // Native wheel handler (non-passive) for pinch-to-zoom
-  useEffect(() => {
-    const el = ganttContainerRef.current;
+  // Wheel handler ref — persists across mounts so cleanup works correctly
+  const wheelHandlerRef = useRef<((e: WheelEvent) => void) | null>(null);
+
+  // Callback ref for gantt container — attaches wheel handler on mount, detaches on unmount
+  const ganttRefCallback = useCallback((el: HTMLDivElement | null) => {
+    // Clean up previous
+    if (ganttContainerRef.current && wheelHandlerRef.current) {
+      ganttContainerRef.current.removeEventListener('wheel', wheelHandlerRef.current);
+    }
+    ganttContainerRef.current = el;
     if (!el) return;
+
     const handler = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
+      // Only zoom on pinch gesture (ctrlKey is set for trackpad pinch-to-zoom)
+      if (!e.ctrlKey) return;
       e.preventDefault();
       const rect = el.getBoundingClientRect();
       const { zoom: z, viewStart: vs, viewWidth: vw } = zoomRef.current;
@@ -658,34 +949,43 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
       setZoom(newZoom);
       setPanOffset(newOffset);
     };
+    wheelHandlerRef.current = handler;
     el.addEventListener('wheel', handler, { passive: false });
-    return () => el.removeEventListener('wheel', handler);
-  }, [sessions.length, selectedTaskId]); // re-attach when gantt mounts
+  }, []);
 
-  // Pan via mouse drag
+  // Pan via mouse drag (with movement threshold to preserve click interactions)
+  const PAN_THRESHOLD = 4; // pixels before a pointerdown becomes a drag
   const handlePanStart = useCallback((e: React.PointerEvent) => {
     if (zoom <= 1) return;
-    // Only middle-click or when zoomed and dragging on empty area
     if (e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    if (target.closest('[data-span]')) return; // don't pan when clicking spans
-    e.preventDefault();
-    panDragRef.current = { startX: e.clientX, startOffset: panOffset };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    panDragRef.current = { startX: e.clientX, startOffset: panOffset, dragging: false, pointerId: e.pointerId };
   }, [zoom, panOffset]);
 
   const handlePanMove = useCallback((e: React.PointerEvent) => {
     if (!panDragRef.current || !ganttContainerRef.current) return;
-    const rect = ganttContainerRef.current.getBoundingClientRect();
     const dx = e.clientX - panDragRef.current.startX;
+    if (!panDragRef.current.dragging) {
+      if (Math.abs(dx) < PAN_THRESHOLD) return;
+      // Exceeded threshold — start dragging
+      panDragRef.current.dragging = true;
+      (e.currentTarget as HTMLElement).setPointerCapture(panDragRef.current.pointerId);
+    }
+    const rect = ganttContainerRef.current.getBoundingClientRect();
     const fracDx = dx / rect.width * viewWidth;
     let newOffset = panDragRef.current.startOffset - fracDx;
     newOffset = Math.max(0, Math.min(1 - viewWidth, newOffset));
     setPanOffset(newOffset);
   }, [viewWidth]);
 
-  const handlePanEnd = useCallback(() => {
+  const handlePanEnd = useCallback((e: React.PointerEvent) => {
+    const wasDragging = panDragRef.current?.dragging;
     panDragRef.current = null;
+    if (wasDragging) {
+      // Prevent the click event that follows pointerup after a drag
+      const el = e.currentTarget as HTMLElement;
+      const suppress = (ce: Event) => { ce.stopPropagation(); el.removeEventListener('click', suppress, true); };
+      el.addEventListener('click', suppress, true);
+    }
   }, []);
 
   // Time axis ticks — computed for the visible window
@@ -727,7 +1027,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
     return result;
   }, [ganttDuration, visibleDurationMs, panOffset]);
 
-  const hasContent = sessions.length > 0;
+  const hasContent = allSessions.length > 0;
 
   return (
     <div className="flex h-full">
@@ -766,29 +1066,36 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
       {/* Center: gantt with time axis */}
       <div className="flex-1 relative min-h-0">
         {selectedTask ? (
-          <Tabs value={traceView} onValueChange={v => setTraceView(v as 'detail' | 'flamegraph' | 'table')} className="flex flex-col h-full gap-0">
+          <Tabs value={traceView} onValueChange={v => setTraceView(v as typeof traceView)} className="flex flex-col h-full gap-0">
             {/* Header: tabs + iteration selector */}
             <div className="flex items-center gap-3 px-4 pt-2 pb-1 border-b border-border/50 shrink-0">
               <TabsList variant="line" className="h-7">
                 <TabsTrigger value="detail" className="text-xs px-2 py-1">Detail</TabsTrigger>
+                {subtasks.length > 0 && (
+                  <TabsTrigger value="subtasks" className="text-xs px-2 py-1">Subtasks</TabsTrigger>
+                )}
+                {outputs.length > 0 && (
+                  <TabsTrigger value="output" className="text-xs px-2 py-1">Output</TabsTrigger>
+                )}
+                {isIterated && (
+                  <TabsTrigger value="iterations" className="text-xs px-2 py-1">Iterations</TabsTrigger>
+                )}
                 <TabsTrigger value="flamegraph" className="text-xs px-2 py-1">Flame Graph</TabsTrigger>
                 <TabsTrigger value="table" className="text-xs px-2 py-1">Table</TabsTrigger>
               </TabsList>
-              {isIterated && traceView !== 'detail' && (
-                <select
-                  value={selectedIteration ?? ''}
-                  onChange={e => {
-                    setSelectedIteration(Number(e.target.value));
-                    setSelection(null);
-                  }}
-                  className="text-xs border rounded px-2 py-1 bg-background"
-                >
-                  {iterations.map(idx => (
-                    <option key={idx} value={idx}>Iteration {idx + 1}</option>
-                  ))}
-                </select>
-              )}
             </div>
+
+            {isIterated && isParallelIteration && (
+              <IterationBar
+                iterations={iterations}
+                selectedIteration={selectedIteration}
+                onSelectIteration={(idx) => {
+                  setSelectedIteration(idx);
+                  setSelection(null);
+                }}
+                datasetItems={taskDetail?.datasetItems ?? []}
+              />
+            )}
 
             {/* Detail view */}
             <TabsContent value="detail" className="flex-1 relative min-h-0 m-0">
@@ -797,28 +1104,39 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                   const taskConfig = parseTaskConfig(selectedTask);
                   const events = missionEventsData?.events ?? [];
 
-                  // Get resolved objective from events
+                  // Get resolved objective from task inputs (preferred) or events (fallback)
                   let resolvedObjective: string | undefined;
-                  if (isIterated) {
-                    // For iterated tasks, find matching iteration_started event
-                    const iterEvent = events.find(e => {
-                      if (e.eventType !== 'iteration_started') return false;
-                      try {
-                        const d = JSON.parse(e.dataJson);
-                        return d.taskName === selectedTask.taskName && (selectedIteration == null || d.index === selectedIteration);
-                      } catch { return false; }
-                    });
-                    if (iterEvent) {
-                      try { resolvedObjective = JSON.parse(iterEvent.dataJson).objective; } catch {}
-                    }
-                  } else {
-                    // Non-iterated: find task_started event
-                    const taskEvent = events.find(e => {
-                      if (e.eventType !== 'task_started') return false;
-                      try { return JSON.parse(e.dataJson).taskName === selectedTask.taskName; } catch { return false; }
-                    });
-                    if (taskEvent) {
-                      try { resolvedObjective = JSON.parse(taskEvent.dataJson).objective; } catch {}
+                  const inputs = taskDetail?.inputs ?? [];
+                  if (isIterated && selectedIteration != null) {
+                    // Iterated: use input for selected iteration
+                    const iterInput = inputs.find(inp => inp.iterationIndex === selectedIteration);
+                    resolvedObjective = iterInput?.objective;
+                  } else if (inputs.length > 0) {
+                    // Non-iterated: use the single input
+                    resolvedObjective = inputs[0]?.objective;
+                  }
+
+                  // Fallback to events if no inputs stored yet
+                  if (!resolvedObjective) {
+                    if (isIterated) {
+                      const iterEvent = events.find(e => {
+                        if (e.eventType !== 'iteration_started') return false;
+                        try {
+                          const d = JSON.parse(e.dataJson);
+                          return d.taskName === selectedTask.taskName && (selectedIteration == null || d.index === selectedIteration);
+                        } catch { return false; }
+                      });
+                      if (iterEvent) {
+                        try { resolvedObjective = JSON.parse(iterEvent.dataJson).objective; } catch {}
+                      }
+                    } else {
+                      const taskEvent = events.find(e => {
+                        if (e.eventType !== 'task_started') return false;
+                        try { return JSON.parse(e.dataJson).taskName === selectedTask.taskName; } catch { return false; }
+                      });
+                      if (taskEvent) {
+                        try { resolvedObjective = JSON.parse(taskEvent.dataJson).objective; } catch {}
+                      }
                     }
                   }
 
@@ -833,6 +1151,27 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                           <div className="text-xs whitespace-pre-wrap bg-muted/50 rounded px-3 py-2">{objective}</div>
                         </div>
                       )}
+
+                      {/* Dataset Item */}
+                      {isIterated && selectedIteration != null && (() => {
+                        const item = (taskDetail?.datasetItems ?? []).find(d => d.index === selectedIteration);
+                        if (!item) return null;
+                        let parsed: Record<string, unknown>;
+                        try { parsed = JSON.parse(item.itemJson); } catch { return null; }
+                        return (
+                          <div>
+                            <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                              Dataset Item (Iteration {selectedIteration + 1})
+                            </div>
+                            <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs bg-muted/50 rounded px-3 py-2">
+                              {Object.entries(parsed).flatMap(([k, v]) => [
+                                <span key={`${k}-l`} className="text-muted-foreground font-medium">{k}</span>,
+                                <span key={`${k}-v`} className="break-all">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>,
+                              ])}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Config */}
                       <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
@@ -897,14 +1236,6 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                         )}
                       </div>
 
-                      {/* Summary */}
-                      {selectedTask.summary && (
-                        <div>
-                          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">Summary</div>
-                          <div className="text-xs whitespace-pre-wrap bg-muted/50 rounded px-3 py-2">{selectedTask.summary}</div>
-                        </div>
-                      )}
-
                       {/* Error */}
                       {selectedTask.error && (
                         <div>
@@ -913,47 +1244,197 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                         </div>
                       )}
 
-                      {/* Iterated objectives list */}
-                      {isIterated && (
-                        <div>
-                          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">All Iteration Objectives</div>
-                          <div className="space-y-1">
-                            {events
-                              .filter(e => e.eventType === 'iteration_started')
-                              .filter(e => { try { return JSON.parse(e.dataJson).taskName === selectedTask.taskName; } catch { return false; } })
-                              .sort((a, b) => { try { return JSON.parse(a.dataJson).index - JSON.parse(b.dataJson).index; } catch { return 0; } })
-                              .map((e, i) => {
-                                try {
-                                  const d = JSON.parse(e.dataJson);
-                                  return (
-                                    <div key={i} className="text-xs bg-muted/30 rounded px-3 py-1.5">
-                                      <span className="text-muted-foreground font-medium">#{d.index + 1}:</span>{' '}
-                                      <span className="whitespace-pre-wrap">{d.objective}</span>
-                                    </div>
-                                  );
-                                } catch { return null; }
-                              })}
-                            {events.filter(e => e.eventType === 'iteration_started').filter(e => { try { return JSON.parse(e.dataJson).taskName === selectedTask.taskName; } catch { return false; } }).length === 0 && (
-                              <p className="text-xs text-muted-foreground">No iterations started yet.</p>
-                            )}
-                          </div>
-                        </div>
-                      )}
                     </>
                   );
                 })()}
               </div>
             </TabsContent>
 
+            {/* Subtasks view */}
+            <TabsContent value="subtasks" className="flex-1 relative min-h-0 m-0 flex flex-col">
+              {isIterated && !isParallelIteration && (
+                <IterationBar
+                  iterations={iterations}
+                  selectedIteration={selectedIteration}
+                  onSelectIteration={(idx) => { setSelectedIteration(idx); setSelection(null); }}
+                  onSelectAll={() => { setSelectedIteration(null); setSelection(null); }}
+                  datasetItems={taskDetail?.datasetItems ?? []}
+                  borderTop
+                />
+              )}
+              <div className="flex-1 relative min-h-0">
+              <div className="absolute inset-0 overflow-auto p-4">
+                {subtasks.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    {isIterated ? 'No subtasks for this iteration.' : 'No subtasks defined.'}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {isIterated && selectedIteration != null && (
+                      <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                        Iteration {selectedIteration + 1} Subtasks
+                        <span className="ml-2 text-muted-foreground/60">
+                          ({subtasks.filter(st => st.status === 'completed').length}/{subtasks.length} complete)
+                        </span>
+                      </div>
+                    )}
+                    {subtasks.map((st: SubtaskInfo) => (
+                      <div key={`${st.iterationIndex ?? 0}-${st.index}`} className="flex items-center gap-3 px-3 py-2 rounded-md bg-muted/30">
+                        <div className={cn(
+                          'h-2 w-2 rounded-full shrink-0',
+                          st.status === 'completed' ? 'bg-green-500' :
+                          st.status === 'in_progress' ? 'bg-blue-500' :
+                          'bg-muted-foreground/30'
+                        )} />
+                        <span className="text-sm flex-1">{st.title}</span>
+                        <Badge variant="secondary" className="text-[10px]">{st.status.replace('_', ' ')}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              </div>
+            </TabsContent>
+
+            {/* Output view */}
+            <TabsContent value="output" className="flex-1 relative min-h-0 m-0 flex flex-col">
+              {isIterated && !isParallelIteration && (
+                <IterationBar
+                  iterations={iterations}
+                  selectedIteration={selectedIteration}
+                  onSelectIteration={(idx) => { setSelectedIteration(idx); setSelection(null); }}
+                  onSelectAll={() => { setSelectedIteration(null); setSelection(null); }}
+                  datasetItems={taskDetail?.datasetItems ?? []}
+                  borderTop
+                />
+              )}
+              <div className="flex-1 relative min-h-0">
+              <div className="absolute inset-0 overflow-auto p-4 space-y-3">
+                {(() => {
+                  if (outputs.length === 0) {
+                    return <p className="text-sm text-muted-foreground">No output recorded.</p>;
+                  }
+                  return outputs.map((o: TaskOutputInfo) => (
+                    <div key={o.id} className="space-y-2">
+                      {o.datasetName != null && (
+                        <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                          {o.datasetName}{o.datasetIndex != null ? ` #${o.datasetIndex + 1}` : ''}
+                        </div>
+                      )}
+                      {o.outputJson && (
+                        <pre className="text-xs bg-muted/50 rounded px-3 py-2 overflow-x-auto whitespace-pre-wrap">{
+                          (() => { try { return JSON.stringify(JSON.parse(o.outputJson), null, 2); } catch { return o.outputJson; } })()
+                        }</pre>
+                      )}
+                    </div>
+                  ));
+                })()}
+              </div>
+              </div>
+            </TabsContent>
+
+            {/* Iterations view */}
+            <TabsContent value="iterations" className="flex-1 relative min-h-0 m-0">
+              <div className="absolute inset-0 overflow-auto p-4">
+                <div className="space-y-1">
+                  {iterations.map(idx => {
+                    const isActive = idx === selectedIteration;
+                    const item = (taskDetail?.datasetItems ?? []).find(d => d.index === idx);
+                    let parsedItem: Record<string, unknown> | null = null;
+                    if (item) {
+                      try { parsedItem = JSON.parse(item.itemJson); } catch { /* skip */ }
+                    }
+
+                    // Subtask status for this iteration
+                    const allSt = taskDetail?.subtasks ?? [];
+                    const iterSt = isParallelIteration
+                      ? allSt.filter(st => {
+                          const sess = allSessions.find(s => s.iterationIndex === idx);
+                          return sess && st.sessionId === sess.id;
+                        })
+                      : allSt.filter(st => st.iterationIndex === idx);
+                    const completedSt = iterSt.filter(st => st.status === 'completed').length;
+                    const totalSt = iterSt.length;
+                    const allStDone = totalSt > 0 && completedSt === totalSt;
+
+                    // Output status
+                    const iterOutputs = (taskDetail?.outputs ?? []).filter(o => o.datasetIndex === idx);
+                    const hasOutput = iterOutputs.length > 0;
+
+                    // Objective (parallel only — from inputs)
+                    const iterInput = isParallelIteration
+                      ? (taskDetail?.inputs ?? []).find(inp => inp.iterationIndex === idx)
+                      : null;
+
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          setSelectedIteration(idx);
+                          setSelection(null);
+                        }}
+                        className={cn(
+                          'w-full text-left rounded-md px-3 py-2 transition-colors',
+                          isActive
+                            ? 'bg-muted ring-1 ring-foreground/20'
+                            : 'bg-muted/30 hover:bg-muted/50'
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-bold text-muted-foreground w-6 shrink-0">#{idx + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            {parsedItem && (
+                              <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+                                {Object.entries(parsedItem).map(([k, v]) => (
+                                  <span key={k}>
+                                    <span className="text-muted-foreground">{k}:</span>{' '}
+                                    <span className="font-medium">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {iterInput?.objective && (
+                              <div className="text-[11px] text-muted-foreground mt-0.5 truncate">{iterInput.objective}</div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0 text-[10px]">
+                            {totalSt > 0 && (
+                              <span className={cn(
+                                'flex items-center gap-1',
+                                allStDone ? 'text-green-600' : 'text-muted-foreground'
+                              )}>
+                                <span className={cn('h-1.5 w-1.5 rounded-full', allStDone ? 'bg-green-500' : 'bg-muted-foreground/40')} />
+                                {completedSt}/{totalSt}
+                              </span>
+                            )}
+                            {hasOutput && (
+                              <span className="text-green-600">output</span>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </TabsContent>
+
             {/* Flame Graph view */}
-            <TabsContent value="flamegraph" className="flex-1 relative min-h-0 m-0">
+            <TabsContent value="flamegraph" className="flex-1 relative min-h-0 m-0 flex flex-col">
+              {isIterated && !isParallelIteration && (
+                <IterationBar
+                  iterations={iterations}
+                  selectedIteration={selectedIteration}
+                  onSelectIteration={(idx) => { setSelectedIteration(idx); setSelection(null); }}
+                  onSelectAll={() => { setSelectedIteration(null); setSelection(null); }}
+                  datasetItems={taskDetail?.datasetItems ?? []}
+                  borderTop
+                />
+              )}
               {!hasContent ? (
-                <p className="text-sm text-muted-foreground p-4">
-                  {allSessions.length > 0 && sessions.length === 0
-                    ? 'No sessions for this iteration.'
-                    : 'No sessions recorded for this task.'}
-                </p>
+                <p className="text-sm text-muted-foreground p-4">No sessions recorded for this task.</p>
               ) : (<>
+              <div className="flex-1 relative min-h-0">
               <div className="absolute inset-0 overflow-auto">
                 <div className="flex flex-col min-w-0">
                   {/* Time axis */}
@@ -969,14 +1450,29 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
 
                   {/* Gantt rows — hierarchical like Datadog trace view */}
                   <div
-                    ref={ganttContainerRef}
+                    ref={ganttRefCallback}
                     className={cn('px-8 pb-3 relative', zoom > 1 && 'cursor-grab active:cursor-grabbing')}
                     onPointerDown={handlePanStart}
                     onPointerMove={handlePanMove}
                     onPointerUp={handlePanEnd}
                   >
                     {ganttLines.map((spans, lineIdx) => (
-                      <div key={lineIdx} className="relative h-8 overflow-hidden">
+                      <div key={lineIdx} className="relative h-16 overflow-hidden">
+                        {/* Iteration highlight overlay (inside each row so overflow-hidden clips it) */}
+                        {iterationTimeRange && (() => {
+                          const rawLeft = toPercent(iterationTimeRange.start);
+                          const rawRight = toPercent(iterationTimeRange.end);
+                          const left = Math.max(0, rawLeft);
+                          const right = Math.min(100, rawRight);
+                          const width = right - left;
+                          if (width <= 0) return null;
+                          return (
+                            <div
+                              className="absolute top-0 bottom-0 border-x-2 border-amber-400 bg-amber-400/10 pointer-events-none z-[5]"
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                            />
+                          );
+                        })()}
                         {/* Gridlines */}
                         {ticks.map((tick, i) => (
                           <div key={i} className="absolute top-0 h-full w-px bg-border/20" style={{ left: `${tick.pct}%` }} />
@@ -991,7 +1487,8 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                           const durLabel = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
                           const isSelected = (span.sessionId && selection?.type === 'session' && selection.sessionId === span.sessionId)
                             || (span.toolResult && selection?.type === 'tool' && selection.toolResult.id === span.toolResult.id)
-                            || (span.toolResult?.toolName === 'call_agent' && selection?.type === 'session' && (() => {
+                            || (span.category === 'agent' && selection?.type === 'session' && selection.agentName && span.label === selection.agentName)
+                            || (span.toolResult?.toolName === 'call_agent' && selection?.type === 'session' && !selection.agentName && (() => {
                               const as = findAgentSession(span.toolResult!);
                               return as && as.id === selection.sessionId;
                             })());
@@ -1002,19 +1499,22 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                               key={span.id}
                               data-span
                               className={cn(
-                                'absolute inset-0 cursor-pointer transition-colors flex items-center overflow-hidden border-[0.5px]',
+                                'absolute top-0 bottom-0 cursor-pointer transition-colors flex items-center overflow-hidden border-[0.5px]',
                                 SPAN_COLORS[span.category],
                                 isSelected ? 'border-2 border-black brightness-110' : 'border-white/80 hover:brightness-110',
                               )}
-                              style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
+                              style={clampedLeft + clampedWidth >= 99.5
+                                ? { right: `${100 - clampedLeft - clampedWidth}%`, width: `${clampedWidth}%`, minWidth: '3px' }
+                                : { left: `${clampedLeft}%`, width: `${clampedWidth}%`, minWidth: '3px' }
+                              }
                               title={`${span.label} (${durLabel})`}
                               onClick={() => {
-                                if (span.sessionId) setSelection({ type: 'session', sessionId: span.sessionId });
-                                else if (span.toolResult && span.toolResult.toolName === 'call_agent') {
+                                if (span.category === 'agent' && span.toolResult?.toolName === 'call_agent') {
                                   const agentSession = findAgentSession(span.toolResult);
-                                  if (agentSession) setSelection({ type: 'session', sessionId: agentSession.id });
+                                  if (agentSession) setSelection({ type: 'session', sessionId: agentSession.id, agentName: span.label });
                                   else setSelection({ type: 'tool', toolResult: span.toolResult });
                                 }
+                                else if (span.sessionId) setSelection({ type: 'session', sessionId: span.sessionId });
                                 else if (span.toolResult) setSelection({ type: 'tool', toolResult: span.toolResult });
                               }}
                             >
@@ -1026,6 +1526,33 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                                   {durLabel}
                                 </span>
                               )}
+                              {/* Reasoning tick marks */}
+                              {messageTicks.get(span.id)?.map((tick, ti) => {
+                                // Adjust tick position for clamped span bounds
+                                const absPos = left + tick.pct / 100 * width;
+                                const clampedPct = ((absPos - clampedLeft) / clampedWidth) * 100;
+                                if (clampedPct < -1 || clampedPct > 101) return null;
+                                return (
+                                <div
+                                  key={ti}
+                                  className="absolute top-0 h-full w-[3px] -ml-[1px] bg-white/25 hover:bg-white/60 cursor-pointer z-10"
+                                  style={{ left: `${clampedPct}%` }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const sessionId = span.sessionId ?? (() => {
+                                      if (span.toolResult?.toolName === 'call_agent') {
+                                        return findAgentSession(span.toolResult)?.id;
+                                      }
+                                      return undefined;
+                                    })();
+                                    if (sessionId) {
+                                      setSelection({ type: 'session', sessionId });
+                                      setScrollToActivityTime(tick.time);
+                                    }
+                                  }}
+                                />
+                                );
+                              })}
                             </div>
                           );
                         })}
@@ -1060,18 +1587,26 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                   </div>
                 </div>
               )}
+              </div>
               </>)}
             </TabsContent>
 
             {/* Table view */}
-            <TabsContent value="table" className="flex-1 relative min-h-0 m-0">
+            <TabsContent value="table" className="flex-1 relative min-h-0 m-0 flex flex-col">
+              {isIterated && !isParallelIteration && (
+                <IterationBar
+                  iterations={iterations}
+                  selectedIteration={selectedIteration}
+                  onSelectIteration={(idx) => { setSelectedIteration(idx); setSelection(null); }}
+                  onSelectAll={() => { setSelectedIteration(null); setSelection(null); }}
+                  datasetItems={taskDetail?.datasetItems ?? []}
+                  borderTop
+                />
+              )}
               {!hasContent ? (
-                <p className="text-sm text-muted-foreground p-4">
-                  {allSessions.length > 0 && sessions.length === 0
-                    ? 'No sessions for this iteration.'
-                    : 'No sessions recorded for this task.'}
-                </p>
+                <p className="text-sm text-muted-foreground p-4">No sessions recorded for this task.</p>
               ) : (
+              <div className="flex-1 relative min-h-0">
               <div className="absolute inset-0 overflow-auto">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-background z-10">
@@ -1085,24 +1620,24 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                   <tbody>
                     {(() => {
                       // Build hierarchical rows: commander → its tools/agent calls → agent's tools
-                      type TableRow = { id: string; parentId: string | null; depth: number; hasChildren: boolean; type: string; typeColor: string; name: string; startMs: number; durMs: number; agentSessionId?: string; onClick: () => void };
+                      type TableRow = { id: string; parentId: string | null; depth: number; hasChildren: boolean; type: string; typeColor: string; name: string; startMs: number; durMs: number; agentSessionId?: string; inIteration?: boolean | null; onClick: () => void };
                       const rows: TableRow[] = [];
 
-                      const cmdr = sessions.find(s => s.role === 'commander');
+                      const cmdr = allSessions.find(s => s.role === 'commander');
                       if (cmdr) {
                         const cmdrRowId = `session-${cmdr.id}`;
                         const startMs = new Date(cmdr.startedAt).getTime();
                         const endMs = cmdr.finishedAt ? new Date(cmdr.finishedAt).getTime() : Date.now();
 
-                        // Commander's tool results, sorted by time
-                        const cmdrResults = toolResults
+                        // Commander's tool results, sorted by time (always show all)
+                        const cmdrResults = allToolResults
                           .filter(tr => tr.sessionId === cmdr.id)
                           .sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
 
                         rows.push({
                           id: cmdrRowId, parentId: null, depth: 0, hasChildren: cmdrResults.length > 0,
                           type: 'Commander', typeColor: 'bg-purple-500', name: 'commander',
-                          startMs, durMs: endMs - startMs,
+                          startMs, durMs: endMs - startMs, inIteration: iterationToolResultIds ? true : null,
                           onClick: () => setSelection({ type: 'session', sessionId: cmdr.id }),
                         });
 
@@ -1121,10 +1656,10 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                           const trEnd = new Date(tr.finishedAt).getTime();
 
                           // Collect agent children first to know if this row has children
-                          let agentResults: typeof toolResults = [];
+                          let agentResults: typeof allToolResults = [];
                           if (isAgentCall) {
-                            const agentSessions = sessions.filter(s => s.role !== 'commander');
-                            agentResults = toolResults
+                            const agentSessions = allSessions.filter(s => s.role !== 'commander');
+                            agentResults = allToolResults
                               .filter(atr => {
                                 if (atr.sessionId === cmdr.id) return false;
                                 const aStart = new Date(atr.startedAt).getTime();
@@ -1135,12 +1670,14 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                           }
 
                           const resolvedAgentSession = isAgentCall ? findAgentSession(tr) : undefined;
+                          const isDatasetNext = tr.toolName === 'dataset_next';
+                          const trInIteration = iterationToolResultIds ? iterationToolResultIds.has(tr.id) : null;
                           rows.push({
                             id: trRowId, parentId: cmdrRowId, depth: 1, hasChildren: agentResults.length > 0,
-                            type: isAgentCall ? 'Agent' : 'Tool',
-                            typeColor: isAgentCall ? 'bg-blue-500' : 'bg-teal-500',
+                            type: isAgentCall ? 'Agent' : isDatasetNext ? 'Iterator' : 'Tool',
+                            typeColor: isAgentCall ? 'bg-blue-500' : isDatasetNext ? 'bg-amber-500' : 'bg-teal-500',
                             name, startMs: trStart, durMs: trEnd - trStart,
-                            agentSessionId: resolvedAgentSession?.id,
+                            agentSessionId: resolvedAgentSession?.id, inIteration: trInIteration,
                             onClick: () => {
                               if (resolvedAgentSession) { setSelection({ type: 'session', sessionId: resolvedAgentSession.id }); return; }
                               setSelection({ type: 'tool', toolResult: tr });
@@ -1154,6 +1691,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                               id: `tr-${atr.id}`, parentId: trRowId, depth: 2, hasChildren: false,
                               type: 'Tool', typeColor: 'bg-teal-500',
                               name: atr.toolName, startMs: aStart, durMs: aEnd - aStart,
+                              inIteration: trInIteration,
                               onClick: () => setSelection({ type: 'tool', toolResult: atr }),
                             });
                           }
@@ -1179,6 +1717,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                             || (row.id.startsWith('tr-') && selection?.type === 'tool' && selection.toolResult.id === row.id.slice(3))
                             || (row.agentSessionId != null && selection?.type === 'session' && selection.sessionId === row.agentSessionId);
                           const isCollapsed = collapsedRows.has(row.id);
+                          const inIteration = row.inIteration;
 
                           return (
                             <tr
@@ -1186,6 +1725,8 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                               className={cn(
                                 'border-b border-border/30 cursor-pointer hover:bg-muted/50 transition-colors',
                                 isSelected && 'bg-muted',
+                                inIteration === false && 'opacity-40',
+                                inIteration === true && 'border-l-2 border-l-amber-400',
                               )}
                               onClick={row.onClick}
                             >
@@ -1222,6 +1763,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                     })()}
                   </tbody>
                 </table>
+              </div>
               </div>
               )}
             </TabsContent>
@@ -1272,19 +1814,22 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
 
           {/* Session detail with tabs */}
           {selection.type === 'session' && (
-            <Tabs defaultValue="activity" className="w-full">
+            <Tabs value={detailPanelTab} onValueChange={setDetailPanelTab} className="w-full">
               <div className="px-3 pt-1">
                 <TabsList variant="line" className="w-full">
                   <TabsTrigger value="activity" className="text-[10px]">Activity</TabsTrigger>
                   <TabsTrigger value="messages" className="text-[10px]">Messages</TabsTrigger>
+                  <TabsTrigger value="system" className="text-[10px]">System</TabsTrigger>
                 </TabsList>
               </div>
               <TabsContent value="activity" className="p-3 space-y-2 mt-0">
                 {sessionDetailEvents.length > 0 ? (
                   sessionDetailEvents.map((evt, i) => {
-                    if (evt.eventType === 'agent_thinking' || evt.eventType === 'commander_reasoning' || evt.eventType === 'iteration_reasoning') {
+                    const refCb = (el: HTMLElement | null) => { if (el) activityRefs.current.set(i, el as HTMLDivElement); };
+                    const isHighlighted = highlightedActivityIdx === i;
+                    if (evt.eventType === 'agent_thinking' || evt.eventType === 'commander_reasoning') {
                       return (
-                        <details key={i} className="group">
+                        <details key={i} ref={refCb as React.Ref<HTMLDetailsElement>} className={cn("group rounded transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
                           <summary className="text-[10px] text-violet-500 cursor-pointer font-medium">Thinking...</summary>
                           <p className="text-[10px] text-muted-foreground mt-1 whitespace-pre-wrap max-h-32 overflow-y-auto">
                             {String(evt.data.content || evt.data.text || '')}
@@ -1294,7 +1839,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                     }
                     if (evt.eventType === 'agent_calling_tool' || evt.eventType === 'commander_calling_tool') {
                       return (
-                        <details key={i} className="border rounded p-2">
+                        <details key={i} ref={refCb as React.Ref<HTMLDetailsElement>} className={cn("border rounded p-2 transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
                           <summary className="text-[10px] font-medium cursor-pointer flex items-center gap-1">
                             <span className="text-yellow-600">Tool:</span> {String(evt.data.toolName)}
                             {toolDurations.has(i) && <span className="text-muted-foreground font-normal ml-auto">{toolDurations.get(i)}</span>}
@@ -1314,7 +1859,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                     }
                     if (evt.eventType === 'agent_tool_complete' || evt.eventType === 'commander_tool_complete') {
                       return (
-                        <details key={i} className="border rounded p-2">
+                        <details key={i} ref={refCb as React.Ref<HTMLDetailsElement>} className={cn("border rounded p-2 transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
                           <summary className="text-[10px] font-medium cursor-pointer flex items-center gap-1">
                             <span className="text-green-600">Result:</span> {String(evt.data.toolName)}
                             {toolDurations.has(i) && <span className="text-muted-foreground font-normal ml-auto">{toolDurations.get(i)}</span>}
@@ -1327,9 +1872,9 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                         </details>
                       );
                     }
-                    if (evt.eventType === 'agent_answer' || evt.eventType === 'commander_answer' || evt.eventType === 'iteration_answer') {
+                    if (evt.eventType === 'agent_answer' || evt.eventType === 'commander_answer') {
                       return (
-                        <div key={i} className="border-l-2 border-green-500 pl-2">
+                        <div key={i} ref={refCb} className={cn("border-l-2 border-green-500 pl-2 rounded transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
                           <span className="text-[10px] font-medium text-green-600">Final Answer</span>
                           <p className="text-xs text-foreground mt-0.5 whitespace-pre-wrap">
                             {String(evt.data.content || evt.data.text || '')}
@@ -1339,7 +1884,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                     }
                     if (evt.eventType === 'agent_started' || evt.eventType === 'agent_completed') {
                       return (
-                        <div key={i} className="text-[10px] text-muted-foreground flex items-center gap-1">
+                        <div key={i} ref={refCb} className={cn("text-[10px] text-muted-foreground flex items-center gap-1 rounded transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
                           <span className={evt.eventType === 'agent_started' ? 'text-blue-500' : 'text-green-500'}>
                             {evt.eventType === 'agent_started' ? 'Agent started' : 'Agent completed'}
                           </span>
@@ -1355,7 +1900,7 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
               </TabsContent>
               <TabsContent value="messages" className="p-3 space-y-2 mt-0">
                 {sessionMessages?.messages?.length ? (
-                  sessionMessages.messages.map(msg => (
+                  sessionMessages.messages.filter(msg => msg.role !== 'system').map(msg => (
                     <div key={msg.id} className="border-l-2 pl-2 mb-2" style={{ borderColor: msg.role === 'user' ? '#6366f1' : '#22c55e' }}>
                       <span className="text-[10px] font-medium">{msg.role}</span>
                       <p className="text-xs text-muted-foreground whitespace-pre-wrap mt-0.5">{msg.content}</p>
@@ -1364,6 +1909,25 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                 ) : (
                   <p className="text-[10px] text-muted-foreground">No messages recorded.</p>
                 )}
+              </TabsContent>
+              <TabsContent value="system" className="p-3 space-y-2 mt-0">
+                {(() => {
+                  const systemMsgs = sessionMessages?.messages?.filter(msg => msg.role === 'system') ?? [];
+                  return systemMsgs.length > 0 ? (
+                    systemMsgs.map((msg, i) => (
+                      <details key={msg.id} open={i === 0} className="border rounded p-2">
+                        <summary className="text-[10px] font-medium cursor-pointer text-muted-foreground">
+                          System prompt {systemMsgs.length > 1 ? `${i + 1}/${systemMsgs.length}` : ''}
+                        </summary>
+                        <pre className="text-[10px] text-muted-foreground whitespace-pre-wrap mt-1 max-h-96 overflow-y-auto">
+                          {msg.content}
+                        </pre>
+                      </details>
+                    ))
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">No system prompts recorded.</p>
+                  );
+                })()}
               </TabsContent>
             </Tabs>
           )}
@@ -1397,6 +1961,14 @@ function TasksTab({ instanceId, tasks, missionId }: { instanceId: string; tasks:
                       </pre>
                     </div>
                   )}
+                  {tr.output && (
+                    <div>
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Output</span>
+                      <pre className="text-[10px] bg-muted/50 rounded p-2 mt-1 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
+                        {tr.output}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -1420,16 +1992,18 @@ function EventsTab({ instanceId, missionId, isRunning }: { instanceId: string; m
   const [liveEvents, setLiveEvents] = useState<NormalizedEvent[]>([]);
   const eventLogRef = useRef<HTMLDivElement>(null);
 
+  // Fetch historical events (covers events before page load)
   const { data: historyEventsData } = useQuery({
     queryKey: ['missionEvents', instanceId, missionId],
     queryFn: () => getMissionEvents(instanceId, missionId),
-    enabled: !isRunning,
   });
 
-  // SSE for running missions
+  // SSE for real-time streaming when running
   useEffect(() => {
-    if (!isRunning) return;
-    setLiveEvents([]);
+    if (!isRunning) {
+      setLiveEvents([]);
+      return;
+    }
 
     const source = subscribeMissionEvents(
       instanceId,
@@ -1444,7 +2018,10 @@ function EventsTab({ instanceId, missionId, isRunning }: { instanceId: string; m
         }
       },
       () => {
+        // Mission completed — refetch history for final state, drop live events
         queryClient.invalidateQueries({ queryKey: ['missionEvents', instanceId, missionId] });
+        queryClient.invalidateQueries({ queryKey: ['missionDetail'] });
+        setLiveEvents([]);
       },
       () => {},
     );
@@ -1452,15 +2029,7 @@ function EventsTab({ instanceId, missionId, isRunning }: { instanceId: string; m
     return () => source.close();
   }, [isRunning, instanceId, missionId, queryClient]);
 
-  // Auto-scroll
-  useEffect(() => {
-    if (eventLogRef.current) {
-      eventLogRef.current.scrollTop = eventLogRef.current.scrollHeight;
-    }
-  }, [liveEvents, historyEventsData]);
-
-  const displayEvents: NormalizedEvent[] = useMemo(() => {
-    if (isRunning) return liveEvents;
+  const historyEvents: NormalizedEvent[] = useMemo(() => {
     if (!historyEventsData?.events) return [];
     return historyEventsData.events
       .filter(e => !VERBOSE_EVENTS.has(e.eventType))
@@ -1469,7 +2038,20 @@ function EventsTab({ instanceId, missionId, isRunning }: { instanceId: string; m
         try { data = JSON.parse(e.dataJson || '{}'); } catch { /* skip */ }
         return { eventType: e.eventType, data, timestamp: e.createdAt };
       });
-  }, [isRunning, liveEvents, historyEventsData]);
+  }, [historyEventsData]);
+
+  const displayEvents: NormalizedEvent[] = useMemo(() => {
+    if (!isRunning || liveEvents.length === 0) return historyEvents;
+    // When running: history events + SSE events for real-time updates
+    return [...historyEvents, ...liveEvents];
+  }, [isRunning, liveEvents, historyEvents]);
+
+  // Auto-scroll when running
+  useEffect(() => {
+    if (isRunning && eventLogRef.current) {
+      eventLogRef.current.scrollTop = eventLogRef.current.scrollHeight;
+    }
+  }, [displayEvents, isRunning]);
 
   return (
     <div ref={eventLogRef} className="h-full overflow-y-auto p-3 space-y-0.5">
@@ -1484,7 +2066,7 @@ function EventsTab({ instanceId, missionId, isRunning }: { instanceId: string; m
         ))
       )}
       {isRunning && (
-        <div className="text-[10px] text-blue-500 animate-pulse px-2">streaming...</div>
+        <div className="text-[10px] text-blue-500 animate-pulse px-2">live...</div>
       )}
     </div>
   );
@@ -1521,11 +2103,26 @@ export function MissionInstanceDetail() {
     queryKey: ['missionDetail', id, mid],
     queryFn: () => getMissionDetail(id!, mid!),
     enabled: !!id && !!mid,
+    refetchInterval: (query) => {
+      const status = query.state.data?.mission?.status;
+      return status === 'running' ? 2000 : false;
+    },
   });
 
   const mission = detail?.mission;
   const taskRecords = detail?.tasks ?? [];
   const isRunning = mission?.status === 'running';
+
+  // Default to events tab when mission is running on initial load
+  const initialTabSet = useRef(false);
+  useEffect(() => {
+    if (!initialTabSet.current && mission) {
+      initialTabSet.current = true;
+      if (mission.status === 'running') {
+        setActiveTab('events');
+      }
+    }
+  }, [mission]);
 
   // Parse task configs from stored snapshots (point-in-time, not live config)
   const parsedTasks: TaskInfo[] = useMemo(() => {
@@ -1537,9 +2134,9 @@ export function MissionInstanceDetail() {
 
   // Build status map from task records + live statuses
   const statusMap = useMemo(() => {
-    const map: Record<string, { status: string; summary?: string; error?: string }> = {};
+    const map: Record<string, { status: string; error?: string }> = {};
     for (const tr of taskRecords) {
-      map[tr.taskName] = { status: tr.status, summary: tr.summary ?? undefined, error: tr.error ?? undefined };
+      map[tr.taskName] = { status: tr.status, error: tr.error ?? undefined };
     }
     if (isRunning) {
       for (const [name, status] of Object.entries(liveTaskStatuses)) {
@@ -1554,7 +2151,6 @@ export function MissionInstanceDetail() {
     return parsedTasks.map(t => ({
       ...t,
       runStatus: statusMap[t.name]?.status ?? 'pending',
-      runSummary: statusMap[t.name]?.summary,
       runError: statusMap[t.name]?.error,
     }));
   }, [parsedTasks, statusMap]);
@@ -1699,10 +2295,10 @@ export function MissionInstanceDetail() {
               <GeneralTab mission={mission} tasks={taskRecords} />
             </TabsContent>
             <TabsContent value="datasets" className="h-full m-0">
-              <DatasetsTab instanceId={id!} missionId={mid!} />
+              <DatasetsTab instanceId={id!} missionId={mid!} isRunning={isRunning} />
             </TabsContent>
             <TabsContent value="tasks" className="h-full m-0">
-              <TasksTab instanceId={id!} tasks={taskRecords} missionId={mid!} />
+              <TasksTab instanceId={id!} tasks={taskRecords} missionId={mid!} isRunning={isRunning} />
             </TabsContent>
             <TabsContent value="events" className="h-full m-0">
               <EventsTab instanceId={id!} missionId={mid!} isRunning={isRunning} />

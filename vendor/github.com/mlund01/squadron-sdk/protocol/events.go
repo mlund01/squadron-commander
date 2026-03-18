@@ -27,14 +27,14 @@ const (
 	EventIterationReasoning MissionEventType = "iteration_reasoning"
 	EventIterationAnswer    MissionEventType = "iteration_answer"
 
-	// Summary aggregation
-	EventSummaryAggregation MissionEventType = "summary_aggregation"
-
 	// Commander events
 	EventCommanderReasoning   MissionEventType = "commander_reasoning"
 	EventCommanderAnswer      MissionEventType = "commander_answer"
 	EventCommanderCallingTool MissionEventType = "commander_calling_tool"
 	EventCommanderToolComplete MissionEventType = "commander_tool_complete"
+
+	// Compaction events
+	EventCompaction MissionEventType = "compaction"
 
 	// Agent events
 	EventAgentStarted      MissionEventType = "agent_started"
@@ -75,7 +75,6 @@ type TaskStartedData struct {
 
 type TaskCompletedData struct {
 	TaskName string `json:"taskName"`
-	Summary  string `json:"summary"`
 }
 
 type TaskFailedData struct {
@@ -94,7 +93,6 @@ type TaskIterationStartedData struct {
 type TaskIterationCompletedData struct {
 	TaskName       string `json:"taskName"`
 	CompletedCount int    `json:"completedCount"`
-	WorkingSummary string `json:"workingSummary"`
 }
 
 // Individual iteration events
@@ -108,7 +106,6 @@ type IterationStartedData struct {
 type IterationCompletedData struct {
 	TaskName string `json:"taskName"`
 	Index    int    `json:"index"`
-	Summary  string `json:"summary"`
 }
 
 type IterationFailedData struct {
@@ -137,13 +134,6 @@ type IterationAnswerData struct {
 	Content  string `json:"content"`
 }
 
-// Summary aggregation
-
-type SummaryAggregationData struct {
-	TaskName     string `json:"taskName"`
-	SummaryCount int    `json:"summaryCount"`
-}
-
 // Commander events
 
 type CommanderReasoningData struct {
@@ -166,6 +156,17 @@ type CommanderToolCompleteData struct {
 	TaskName string `json:"taskName"`
 	ToolName string `json:"toolName"`
 	Result   string `json:"result"`
+}
+
+// Compaction events
+
+type CompactionData struct {
+	TaskName          string `json:"taskName"`
+	Entity            string `json:"entity"` // "commander" or "agent"
+	InputTokens       int    `json:"inputTokens"`
+	TokenLimit        int    `json:"tokenLimit"`
+	MessagesCompacted int    `json:"messagesCompacted"`
+	TurnRetention     int    `json:"turnRetention"`
 }
 
 // Agent events

@@ -12,7 +12,6 @@ import {
   SidebarMenuButton,
   SidebarSeparator,
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarGroupContent,
 } from '@/components/ui/sidebar';
 import {
@@ -24,14 +23,15 @@ import {
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Rocket, Bot, Puzzle, RefreshCw, History, FileCode } from 'lucide-react';
+import { Rocket, Bot, Puzzle, RefreshCw, History, FileCode, FolderOpen, KeyRound } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
-const navItems = [
+const staticNavItems = [
   { label: 'Missions', path: 'missions', icon: Rocket },
   { label: 'History', path: 'history', icon: History },
   { label: 'Agents', path: 'agents', icon: Bot },
   { label: 'Plugins', path: 'plugins', icon: Puzzle },
+  { label: 'Variables', path: 'variables', icon: KeyRound },
   { label: 'Config', path: 'config', icon: FileCode },
 ];
 
@@ -71,13 +71,20 @@ export function AppSidebar() {
     navigate(`/instances/${instanceId}/missions`);
   };
 
+  // Build nav items — add "Files" when file browsers are configured
+  const navItems = currentInstance?.config?.sharedFolders?.length
+    ? [...staticNavItems, { label: 'Folders', path: 'files', icon: FolderOpen }]
+    : staticNavItems;
+
   // Determine active nav item from URL
   const activePath = location.pathname.split('/').at(-1) ?? '';
-  // Handle nested paths like /missions/:name/run and /runs/:mid
+  // Handle nested paths like /missions/:name/run, /runs/:mid, and /files/view
   const activeSection = location.pathname.includes('/missions/') && location.pathname.includes('/run')
     ? 'missions'
     : location.pathname.includes('/runs/')
     ? 'history'
+    : location.pathname.includes('/files')
+    ? 'files'
     : activePath;
 
   return (
@@ -128,7 +135,6 @@ export function AppSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => {
@@ -162,12 +168,14 @@ export function AppSidebar() {
   );
 }
 
-function getNavCount(path: string, config?: { missions?: unknown[]; agents?: unknown[]; plugins?: unknown[] }): number | undefined {
+function getNavCount(path: string, config?: { missions?: unknown[]; agents?: unknown[]; plugins?: unknown[]; variables?: unknown[]; sharedFolders?: unknown[] }): number | undefined {
   if (!config) return undefined;
   switch (path) {
     case 'missions': return config.missions?.length;
     case 'agents': return config.agents?.length;
     case 'plugins': return config.plugins?.length;
+    case 'variables': return config.variables?.length;
+    case 'files': return config.sharedFolders?.length;
     default: return undefined;
   }
 }
