@@ -5,10 +5,15 @@ import (
 	"net/http"
 
 	"commander/internal/hub"
+	"commander/internal/keepalive"
 )
 
 // RegisterRoutes registers all REST API endpoints.
-func RegisterRoutes(mux *http.ServeMux, h *hub.Hub) {
+// ka is an optional KeepAlive for managed lifecycle (nil to disable).
+func RegisterRoutes(mux *http.ServeMux, h *hub.Hub, ka *keepalive.KeepAlive) {
+	// Keep-alive endpoint for managed lifecycle
+	mux.HandleFunc("POST /api/keep-alive", handleKeepAlive(ka))
+
 	mux.HandleFunc("GET /api/instances", handleListInstances(h))
 	mux.HandleFunc("GET /api/instances/{id}", handleGetInstance(h))
 	mux.HandleFunc("GET /api/instances/{id}/config", handleGetConfig(h))
@@ -89,6 +94,15 @@ func handleGetConfig(h *hub.Hub) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, instance.Config)
+	}
+}
+
+func handleKeepAlive(ka *keepalive.KeepAlive) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ka != nil {
+			ka.Reset()
+		}
+		w.WriteHeader(http.StatusOK)
 	}
 }
 

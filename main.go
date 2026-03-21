@@ -3,12 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
+	"commander/internal/keepalive"
 	"commander/internal/server"
 )
 
@@ -16,23 +17,33 @@ func main() {
 	addr := flag.String("addr", ":8080", "HTTP server listen address")
 	webDir := flag.String("web-dir", "", "Path to web/dist directory (defaults to web/dist relative to executable)")
 	disableConfigEdit := flag.Bool("disable-config-edit", false, "Disable editing config files from the web UI")
+	keepAliveSecs := flag.Int("keep-alive", 0, "Self-terminate if no keep-alive ping within N seconds (0=disabled)")
 	flag.Parse()
 
-	// Resolve web directory
-	dir := *webDir
-	if dir == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			log.Fatalf("Failed to find executable path: %v", err)
+	// Resolve web assets: use --web-dir if provided, otherwise embedded assets
+	var webFS fs.FS
+	webDirLabel := "(embedded)"
+	if *webDir != "" {
+		if _, err := os.Stat(*webDir); err != nil {
+			log.Fatalf("Web directory not found at %s: %v", *webDir, err)
 		}
-		dir = filepath.Join(filepath.Dir(exe), "web", "dist")
+		webFS = os.DirFS(*webDir)
+		webDirLabel = *webDir
+	} else {
+		sub, err := fs.Sub(embeddedWeb, "web/dist")
+		if err != nil {
+			log.Fatalf("Failed to access embedded web assets: %v", err)
+		}
+		webFS = sub
 	}
 
-	if _, err := os.Stat(dir); err != nil {
-		log.Fatalf("Web directory not found at %s: %v", dir, err)
+	// Set up optional keep-alive death clock
+	var ka *keepalive.KeepAlive
+	if *keepAliveSecs > 0 {
+		ka = keepalive.New(*keepAliveSecs)
 	}
 
-	srv, err := server.New(*addr, os.DirFS(dir), !*disableConfigEdit)
+	srv, err := server.New(*addr, webFS, !*disableConfigEdit, ka)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
@@ -42,11 +53,19 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		fmt.Printf("Commander listening on %s (web: %s)\n", *addr, dir)
+		fmt.Printf("Commander listening on %s (web: %s)\n", *addr, webDirLabel)
 		if err := srv.Start(); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	}()
+
+	// Start keep-alive death clock after server is running
+	if ka != nil {
+		ka.Start(func() {
+			log.Println("Keep-alive expired, shutting down...")
+			stop <- syscall.SIGTERM
+		})
+	}
 
 	<-stop
 	fmt.Println("\nShutting down...")

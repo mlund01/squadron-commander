@@ -10,6 +10,7 @@ import (
 
 	"commander/internal/api"
 	"commander/internal/hub"
+	"commander/internal/keepalive"
 )
 
 // Server is the main HTTP server that serves the React frontend,
@@ -21,7 +22,8 @@ type Server struct {
 
 // New creates a new Server listening on the given address.
 // webFS should be an fs.FS pointing at the web/dist directory.
-func New(addr string, webFS fs.FS, allowConfigEdit bool) (*Server, error) {
+// ka is an optional KeepAlive for managed lifecycle (nil to disable).
+func New(addr string, webFS fs.FS, allowConfigEdit bool, ka *keepalive.KeepAlive) (*Server, error) {
 	h := hub.New(allowConfigEdit)
 	mux := http.NewServeMux()
 
@@ -29,7 +31,7 @@ func New(addr string, webFS fs.FS, allowConfigEdit bool) (*Server, error) {
 	mux.HandleFunc("/ws", h.ServeWS)
 
 	// REST API routes
-	api.RegisterRoutes(mux, h)
+	api.RegisterRoutes(mux, h, ka)
 
 	// Serve React frontend with SPA fallback
 	fileServer := http.FileServer(http.FS(webFS))
