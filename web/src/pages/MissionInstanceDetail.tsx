@@ -594,7 +594,7 @@ function TasksTab({ instanceId, tasks, missionId, isRunning }: { instanceId: str
   }, [allMissionEvents]);
 
   // Stop/resume gap computation — pairs stop[i] with resume[i] to get dead-time intervals
-  const { gaps, compressTime, resumeBreaks } = useMemo(() => {
+  const { compressTime, resumeBreaks } = useMemo(() => {
     const stops: number[] = [];
     const resumes: number[] = [];
     for (const e of allMissionEvents) {
@@ -645,7 +645,7 @@ function TasksTab({ instanceId, tasks, missionId, isRunning }: { instanceId: str
   }, [allMissionEvents, selectedTask]);
 
   // Gantt time range — driven entirely by events, with stop/resume gaps compressed out
-  const { ganttStart, ganttEnd, ganttDuration } = useMemo(() => {
+  const { ganttStart, ganttDuration } = useMemo(() => {
     if (allSessions.length === 0) return { ganttStart: 0, ganttEnd: 0, ganttDuration: 1 };
     let earliest = Infinity;
     let latest = 0;
@@ -958,11 +958,6 @@ function TasksTab({ instanceId, tasks, missionId, isRunning }: { instanceId: str
     const sStart = new Date(session.startedAt).getTime();
     const sEnd = session.finishedAt ? new Date(session.finishedAt).getTime() + 1000 : latestEventTime;
     const isCmd = session.role === 'commander';
-
-    // For iterated tasks, match the iteration-specific taskName (e.g. "write_story[0]")
-    const iterTaskName = isIterated && selectedIteration != null && selectedTask
-      ? `${selectedTask.taskName}[${selectedIteration}]`
-      : null;
 
     return taskEvents
       .filter(e => {
