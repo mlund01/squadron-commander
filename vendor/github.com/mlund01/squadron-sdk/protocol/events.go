@@ -190,9 +190,8 @@ type SessionTurnData struct {
 	Model                    string `json:"model"`
 	InputTokens              int    `json:"inputTokens"`
 	OutputTokens             int    `json:"outputTokens"`
-	CacheCreationInputTokens int    `json:"cacheCreationInputTokens,omitempty"`
-	CacheReadInputTokens     int    `json:"cacheReadInputTokens,omitempty"`
-	CachedTokens             int    `json:"cachedTokens,omitempty"`
+	CacheWriteTokens int `json:"cacheWriteTokens,omitempty"`
+	CacheReadTokens  int `json:"cacheReadTokens,omitempty"`
 	UserMessages             int    `json:"userMessages"`
 	AssistantMessages        int    `json:"assistantMessages"`
 	SystemMessages           int    `json:"systemMessages"`

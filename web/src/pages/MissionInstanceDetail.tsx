@@ -1925,7 +1925,7 @@ function TasksTab({ instanceId, tasks, missionId, isRunning }: { instanceId: str
                   })
                   .filter(Boolean) as Array<{
                     entity: string; model?: string; inputTokens: number; outputTokens: number;
-                    cacheCreationInputTokens?: number; cacheReadInputTokens?: number; cachedTokens?: number;
+                    cacheWriteTokens?: number; cacheReadTokens?: number;
                     userMessages: number; assistantMessages: number; systemMessages: number;
                     payloadBytes: number; turnDurationMs: number; createdAt: string;
                   }>;
@@ -1936,12 +1936,11 @@ function TasksTab({ instanceId, tasks, missionId, isRunning }: { instanceId: str
                 const totals = filtered.reduce((acc, e) => ({
                   inputTokens: acc.inputTokens + e.inputTokens,
                   outputTokens: acc.outputTokens + e.outputTokens,
-                  cacheCreation: acc.cacheCreation + (e.cacheCreationInputTokens || 0),
-                  cacheRead: acc.cacheRead + (e.cacheReadInputTokens || 0),
-                  cached: acc.cached + (e.cachedTokens || 0),
+                  cacheWrite: acc.cacheWrite + (e.cacheWriteTokens || 0),
+                  cacheRead: acc.cacheRead + (e.cacheReadTokens || 0),
                   payloadBytes: acc.payloadBytes + e.payloadBytes,
                   duration: acc.duration + e.turnDurationMs,
-                }), { inputTokens: 0, outputTokens: 0, cacheCreation: 0, cacheRead: 0, cached: 0, payloadBytes: 0, duration: 0 });
+                }), { inputTokens: 0, outputTokens: 0, cacheWrite: 0, cacheRead: 0, payloadBytes: 0, duration: 0 });
 
                 const fmtBytes = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
                 const fmtNum = (n: number) => n.toLocaleString();
@@ -2008,9 +2007,9 @@ function TasksTab({ instanceId, tasks, missionId, isRunning }: { instanceId: str
                         </thead>
                         <tbody>
                           {filtered.map((e, i) => {
-                            const totalInput = e.inputTokens + (e.cacheCreationInputTokens || 0) + (e.cacheReadInputTokens || 0);
-                            const cacheWrite = e.cacheCreationInputTokens || 0;
-                            const cacheRead = e.cacheReadInputTokens || 0;
+                            const cacheWrite = e.cacheWriteTokens || 0;
+                            const cacheRead = e.cacheReadTokens || 0;
+                            const totalInput = e.inputTokens + cacheWrite + cacheRead;
                             return (
                               <tr key={i} className="border-b border-border/30 hover:bg-muted/30">
                                 <td className="px-2 py-1 tabular-nums text-muted-foreground">{i + 1}</td>
@@ -2033,10 +2032,10 @@ function TasksTab({ instanceId, tasks, missionId, isRunning }: { instanceId: str
                           {/* Totals row */}
                           <tr className="border-t-2 font-medium">
                             <td className="px-2 py-1.5" colSpan={3}>Total ({filtered.length} turns)</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(totals.inputTokens + totals.cacheCreation + totals.cacheRead)}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(totals.inputTokens + totals.cacheWrite + totals.cacheRead)}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(totals.outputTokens)}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                              {totals.cacheCreation > 0 ? fmtNum(totals.cacheCreation) : '—'}
+                              {totals.cacheWrite > 0 ? fmtNum(totals.cacheWrite) : '—'}
                             </td>
                             <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
                               {totals.cacheRead > 0 ? fmtNum(totals.cacheRead) : '—'}
