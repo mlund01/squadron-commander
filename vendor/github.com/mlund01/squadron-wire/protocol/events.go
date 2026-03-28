@@ -288,3 +288,11 @@ type RouteChosenData struct {
 	Condition  string `json:"condition"`
 	IsMission  bool   `json:"isMission,omitempty"`
 }
+
+// Schedule/trigger events
+
+type ScheduleSkipData struct {
+	MissionName string `json:"missionName"`
+	Source      string `json:"source"` // "schedule", "schedule[1]", "manual", "webhook"
+	Reason      string `json:"reason"`
+}
