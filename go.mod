@@ -8,3 +8,5 @@ require (
 )
 
 require github.com/google/uuid v1.6.0 // indirect
+
+replace github.com/mlund01/squadron-wire => ../squadron-wire
