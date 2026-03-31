@@ -83,6 +83,8 @@ export interface MissionInputInfo {
   description?: string;
   type?: string;
   required: boolean;
+  items?: MissionInputInfo;
+  properties?: MissionInputInfo[];
 }
 
 export interface TaskIteratorInfo {

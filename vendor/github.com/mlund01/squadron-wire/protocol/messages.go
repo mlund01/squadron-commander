@@ -95,10 +95,12 @@ type DatasetField struct {
 }
 
 type MissionInputInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Type        string `json:"type,omitempty"`
-	Required    bool   `json:"required"`
+	Name        string              `json:"name"`
+	Description string              `json:"description,omitempty"`
+	Type        string              `json:"type,omitempty"`
+	Required    bool                `json:"required"`
+	Items       *MissionInputInfo   `json:"items,omitempty"`
+	Properties  []MissionInputInfo  `json:"properties,omitempty"`
 }
 
 type TaskInfo struct {
