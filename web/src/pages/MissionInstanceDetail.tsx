@@ -14,20 +14,24 @@ import {
 } from '@xyflow/react';
 import dagre from 'dagre';
 import '@xyflow/react/dist/style.css';
-import { ChevronsDown, ChevronsUp, ChevronDown, Repeat, ChevronLeft, ChevronRight, HelpCircle, Square, RotateCcw } from 'lucide-react';
+import { ChevronsDown, ChevronsUp, ChevronDown, Repeat, ChevronLeft, ChevronRight, HelpCircle, Square, RotateCcw, MoreHorizontal } from 'lucide-react';
 
-import { getInstance, getMissionDetail, getMissionEvents, getTaskDetail, getRunDatasets, getDatasetItems, getChatMessages, stopMission, resumeMission } from '@/api/client';
+import { getInstance, getMissionDetail, getMissionEvents, getTaskDetail, getRunDatasets, getDatasetItems, stopMission, resumeMission, getChatMessages } from '@/api/client';
 import { subscribeMissionEvents } from '@/api/sse';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { Switch } from '@/components/ui/switch';
 import { StatusBadge, formatTime, formatDuration } from '@/lib/mission-utils';
 import { useResizablePanel } from '@/hooks/use-resizable-panel';
 import { ZoomControls } from '@/components/zoom-controls';
 import type { TaskInfo, MissionEvent, MissionTaskRecord, ToolResultDTO, TaskOutputInfo, SubtaskInfo, DatasetItemInfo } from '@/api/types';
 import { RouterEdge } from '@/components/RouterEdge';
+import { MarkdownPreview } from '@/components/MarkdownPreview';
 
 
 const NODE_WIDTH = 260;
@@ -311,20 +315,20 @@ function parseTaskConfig(task: MissionTaskRecord): TaskInfo | null {
 /* ── Event helpers ── */
 
 const VERBOSE_EVENTS = new Set([
-  'agent_reasoning_started', 'agent_reasoning_completed', 'agent_answer', 'commander_reasoning_started', 'commander_reasoning_completed', 'commander_answer',
-  'session_turn', 'mission_stopped', 'mission_resumed',
+  'session_turn',
 ]);
 
-function getEventBg(eventType: string): string {
-  if (eventType === 'compaction') return 'bg-purple-500/10';
-  if (eventType.includes('failed')) return 'bg-red-500/10';
-  if (eventType.includes('completed')) return 'bg-green-500/10';
-  if (eventType.includes('started')) return 'bg-blue-500/10';
-  if (eventType.includes('tool')) return 'bg-yellow-500/10';
-  return 'bg-muted/50';
+function getEventColor(eventType: string): string {
+  if (eventType.includes('failed') || eventType.includes('error') || eventType.includes('retrying')) return 'text-red-400';
+  if (eventType.includes('reasoning')) return 'text-blue-400';
+  if (eventType.includes('calling_tool') || eventType.includes('tool_complete')) return 'text-teal-400';
+  if (eventType.includes('answer') || eventType.includes('ask_commander') || eventType.includes('commander_response')) return 'text-emerald-400';
+  if (eventType === 'compaction' || eventType === 'route_chosen') return 'text-violet-400';
+  if (eventType.includes('started') || eventType.includes('completed')) return 'text-purple-400';
+  return 'text-muted-foreground';
 }
 
-function formatEventText(eventType: string, d: Record<string, unknown>): string {
+function formatEventSummary(eventType: string, d: Record<string, unknown>): string {
   switch (eventType) {
     case 'mission_started': return `Mission "${d.missionName}" started (${d.taskCount} tasks)`;
     case 'mission_completed': return `Mission "${d.missionName}" completed`;
@@ -332,19 +336,56 @@ function formatEventText(eventType: string, d: Record<string, unknown>): string 
     case 'task_started': return `Task "${d.taskName}" started`;
     case 'task_completed': return `Task "${d.taskName}" completed`;
     case 'task_failed': return `Task "${d.taskName}" failed: ${d.error}`;
+    case 'task_iteration_started': return `Iteration started for "${d.taskName}" — ${d.totalItems} items (${d.parallel ? 'parallel' : 'sequential'})`;
+    case 'task_iteration_completed': return `Iteration completed for "${d.taskName}" — ${d.completedCount} done`;
     case 'agent_started': return `Agent "${d.agentName}" started for "${d.taskName}"`;
     case 'agent_completed': return `Agent "${d.agentName}" completed`;
-    case 'agent_calling_tool': return `Agent calling tool "${d.toolName}"`;
-    case 'agent_tool_complete': return `Tool "${d.toolName}" complete`;
-    case 'commander_calling_tool': return `Commander calling "${d.toolName}"`;
-    case 'commander_tool_complete': return `Commander tool "${d.toolName}" complete`;
+    case 'agent_calling_tool': return `Agent "${d.agentName}" calling tool "${d.toolName}"`;
+    case 'agent_tool_complete': return `Agent "${d.agentName}" tool "${d.toolName}" complete`;
+    case 'agent_reasoning_started': return `Agent "${d.agentName}" reasoning...`;
+    case 'agent_reasoning_completed': return `Agent "${d.agentName}" reasoning complete`;
+    case 'agent_answer': return `Agent "${d.agentName}" answered`;
+    case 'agent_ask_commander': return `Agent "${d.agentName}" asking commander`;
+    case 'agent_commander_response': return `Commander responded to "${d.agentName}"`;
+    case 'commander_calling_tool': return `Commander calling "${d.toolName}" for "${d.taskName}"`;
+    case 'commander_tool_complete': return `Commander tool "${d.toolName}" complete for "${d.taskName}"`;
+    case 'commander_reasoning_started': return `Commander reasoning for "${d.taskName}"...`;
+    case 'commander_reasoning_completed': return `Commander reasoning complete for "${d.taskName}"`;
+    case 'commander_answer': return `Commander answered for "${d.taskName}"`;
     case 'iteration_started': return `Iteration ${d.index} started for "${d.taskName}"`;
     case 'iteration_completed': return `Iteration ${d.index} completed for "${d.taskName}"`;
-    case 'iteration_failed': return `Iteration ${d.index} failed for "${d.taskName}"`;
-    case 'compaction': return `Context compacted (${d.entity}): ${d.inputTokens} tokens > ${d.tokenLimit} limit, ${d.messagesCompacted} msgs compacted`;
-    case 'route_chosen': return `Route chosen: "${d.routerTask}" → "${d.targetTask}"${d.condition ? ` (${d.condition})` : ''}`;
-    default: return JSON.stringify(d);
+    case 'iteration_failed': return `Iteration ${d.index} failed for "${d.taskName}": ${d.error}`;
+    case 'iteration_retrying': return `Iteration ${d.index} retrying for "${d.taskName}" (attempt ${d.attempt}/${d.maxRetries})`;
+    case 'compaction': return `Context compacted (${d.entity}) — ${d.messagesCompacted} msgs removed (${Number(d.inputTokens).toLocaleString()}/${Number(d.tokenLimit).toLocaleString()} tokens)`;
+    case 'route_chosen': return `Route: "${d.routerTask}" → "${d.targetTask}"${d.condition ? ` (${d.condition})` : ''}`;
+    case 'session_turn': return `Turn: ${d.entity} for "${d.taskName}" — ${d.model} (${Number(d.inputTokens).toLocaleString()} in, ${Number(d.outputTokens).toLocaleString()} out)`;
+    default: return eventType.replace(/_/g, ' ');
   }
+}
+
+function getEventExpandableContent(eventType: string, d: Record<string, unknown>): string | null {
+  if (eventType === 'agent_calling_tool' || eventType === 'commander_calling_tool') {
+    return String(d.input || d.payload || '');
+  }
+  if (eventType === 'agent_tool_complete' || eventType === 'commander_tool_complete') {
+    return String(d.result || d.output || '');
+  }
+  if (eventType === 'agent_reasoning_completed' || eventType === 'commander_reasoning_completed') {
+    return String(d.content || '');
+  }
+  if (eventType === 'agent_answer' || eventType === 'commander_answer') {
+    return String(d.content || '');
+  }
+  if (eventType === 'agent_ask_commander' || eventType === 'agent_commander_response') {
+    return String(d.content || '');
+  }
+  if (eventType === 'task_started' || eventType === 'iteration_started') {
+    return String(d.objective || '');
+  }
+  if (eventType === 'agent_started' && d.instruction) {
+    return String(d.instruction);
+  }
+  return null;
 }
 
 /* ── General Tab ── */
@@ -537,15 +578,15 @@ interface TraceRow {
 const SPAN_COLORS: Record<GanttSpan['category'] | TraceRow['category'], string> = {
   commander: 'bg-purple-500',
   agent: 'bg-purple-500',
-  tool: 'bg-emerald-500',
-  dataset_next: 'bg-amber-500',
+  tool: 'bg-teal-500',
+  dataset_next: 'bg-violet-500',
 };
 
 const SPAN_COLORS_HEX: Record<GanttSpan['category'] | TraceRow['category'], string> = {
   commander: '#a855f7',
   agent: '#a855f7',
-  tool: '#10b981',
-  dataset_next: '#f59e0b',
+  tool: '#14b8a6',
+  dataset_next: '#8b5cf6',
 };
 
 function IterationBar({
@@ -667,10 +708,12 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
 
   const [selectedIteration, setSelectedIteration] = useState<number | null>(null);
   const [selection, setSelection] = useState<PanelSelection>(null);
-  const [traceView, setTraceView] = useState<'detail' | 'subtasks' | 'output' | 'iterations' | 'flamegraph' | 'table' | 'turns'>('detail');
+  const [traceView, setTraceView] = useState<'detail' | 'subtasks' | 'output' | 'iterations' | 'flamegraph' | 'table' | 'turns' | 'events'>('detail');
   const [collapsedRows, setCollapsedRows] = useState<Set<string>>(new Set());
+  const [rawOutput, setRawOutput] = useState(false);
   const [expandedTraceRows, setExpandedTraceRows] = useState<Set<string>>(new Set());
   const [turnsEntityFilter, setTurnsEntityFilter] = useState('all');
+  const [sessionModal, setSessionModal] = useState<{ type: 'messages' | 'system'; sessionId: string } | null>(null);
 
   const selectedSessionId = selection?.type === 'session' ? selection.sessionId : null;
 
@@ -706,12 +749,6 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
     refetchInterval: isRunning ? 1000 : false,
   });
 
-  // Messages for selected session
-  const { data: sessionMessages } = useQuery({
-    queryKey: ['chatMessages', instanceId, selectedSessionId],
-    queryFn: () => getChatMessages(instanceId, selectedSessionId!),
-    enabled: !!selectedSessionId,
-  });
 
   const allSessions = taskDetail?.sessions ?? [];
   const selectedTask = selectedTaskRecord ?? null;
@@ -973,7 +1010,8 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
 
     if (cmdrEvents.length > 0) {
       const spanStart = ct(Math.min(...cmdrEvents.map(e => e.time)));
-      const spanEnd = Math.max(ct(Math.max(...cmdrEvents.map(e => e.time))), cEnd);
+      const childEnd = cmdrToolSpans.length > 0 ? Math.max(...cmdrToolSpans.map(s => s.end)) : 0;
+      const spanEnd = Math.max(ct(Math.max(...cmdrEvents.map(e => e.time))), cEnd, childEnd);
       const breaks = resumeBreaks.filter(t => t > spanStart && t < spanEnd);
       // Convert break points to segments
       let cmdrSegments: { start: number; end: number }[] | undefined;
@@ -1072,9 +1110,10 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
 
       agentTools.sort((a, b) => a.start - b.start);
 
+      const agentChildEnd = agentTools.length > 0 ? Math.max(...agentTools.map(s => s.end)) : span.end;
       rows.push({
         id: `agent-evt-${span.id}`, label: span.agentName,
-        start: span.start, end: span.end,
+        start: span.start, end: Math.max(span.end, agentChildEnd),
         category: 'agent',
         sessionId: span.sessionId || undefined,
         segments: span.spans.length > 1 ? span.spans : undefined,
@@ -1098,7 +1137,9 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
       }
     }
     if (earliest === Infinity) return { ganttStart: 0, ganttDuration: 1 };
-    return { ganttStart: earliest, ganttDuration: Math.max(latest - earliest, 1) };
+    const dur = Math.max(latest - earliest, 1);
+    // Pad 2% so min-width tool bars at the end don't overflow
+    return { ganttStart: earliest, ganttDuration: dur * 1.02 };
   }, [traceRows]);
 
   // Events filtered by iteration (same logic as ganttLines uses)
@@ -1159,79 +1200,101 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
     return ranges;
   }, [traceRows, activeEvents, sessionMap, compressTime]);
 
-  // State for scrolling to a specific activity event in the detail panel
-  const [scrollToActivityTime, setScrollToActivityTime] = useState<number | null>(null);
-  const [highlightedActivityIdx, setHighlightedActivityIdx] = useState<number | null>(null);
-  const [detailPanelTab, setDetailPanelTab] = useState<string>('activity');
-  const activityRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   // Session detail events (filter by time range + role matching)
   const sessionDetailEvents = useMemo(() => {
     if (!selectedSessionId) return [];
-    const session = allSessions.find(s => s.id === selectedSessionId);
-    if (!session) return [];
-    const sStart = new Date(session.startedAt).getTime();
-    const sEnd = session.finishedAt ? new Date(session.finishedAt).getTime() + 1000 : latestEventTime;
-    const isCmd = session.role === 'commander';
 
     return taskEvents
-      .filter(e => {
-        const matchesRole = isCmd
-          ? e.eventType.startsWith('commander_')
-          : e.eventType.startsWith('agent_');
-        if (!matchesRole) return false;
-        if (!isCmd && e.data.agentName !== session.agentName) return false;
-        return e.time >= sStart && e.time <= sEnd;
-      })
+      .filter(e => e.sessionId === selectedSessionId)
       .map(e => ({ eventType: e.eventType, data: e.data, timestamp: e.createdAt }));
-  }, [selectedSessionId, allSessions, taskEvents]);
+  }, [selectedSessionId, taskEvents]);
 
-  // Pre-compute tool call durations for session detail panel
-  const toolDurations = useMemo(() => {
-    const durations = new Map<number, string>();
-    const pending = new Map<string, { index: number; time: number }>();
-    for (let i = 0; i < sessionDetailEvents.length; i++) {
-      const evt = sessionDetailEvents[i];
-      if (evt.eventType === 'commander_calling_tool' || evt.eventType === 'agent_calling_tool') {
-        pending.set(String(evt.data.toolName || ''), { index: i, time: new Date(evt.timestamp).getTime() });
-      } else if (evt.eventType === 'commander_tool_complete' || evt.eventType === 'agent_tool_complete') {
-        const key = String(evt.data.toolName || '');
-        const start = pending.get(key);
-        if (start) {
-          const ms = new Date(evt.timestamp).getTime() - start.time;
-          const label = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-          durations.set(start.index, label);
-          durations.set(i, label);
-          pending.delete(key);
-        }
+  // Build structured session items: reasoning, tool call+result pairs, answers
+  type SessionItem =
+    | { type: 'instruction'; content: string }
+    | { type: 'reasoning'; content: string; duration: string }
+    | { type: 'tool'; toolName: string; input: string; result: string; duration: string }
+    | { type: 'answer'; content: string }
+    | { type: 'ask_commander'; content: string }
+    | { type: 'commander_response'; content: string }
+    | { type: 'compaction'; entity: string; inputTokens: number; tokenLimit: number; messagesCompacted: number };
+
+  const sessionItems = useMemo((): SessionItem[] => {
+    const items: SessionItem[] = [];
+    const pendingTools = new Map<string, { toolName: string; input: string; time: number }>();
+    let reasoningStartTime: number | null = null;
+
+    // For commander sessions, inject the task objective as the first item
+    if (selectedSessionId) {
+      const session = allSessions.find(s => s.id === selectedSessionId);
+      if (session?.role === 'commander' && taskDetail) {
+        const input = taskDetail.inputs?.find(i =>
+          session.iterationIndex != null ? i.iterationIndex === session.iterationIndex : i.iterationIndex == null
+        );
+        if (input?.objective) items.push({ type: 'instruction', content: input.objective });
       }
     }
-    return durations;
-  }, [sessionDetailEvents]);
 
-  // Scroll to activity event when a flame graph tick is clicked
-  useEffect(() => {
-    if (scrollToActivityTime == null || sessionDetailEvents.length === 0) return;
-    setDetailPanelTab('activity');
-    // Find closest event by timestamp
-    let closestIdx = 0;
-    let closestDiff = Infinity;
-    for (let i = 0; i < sessionDetailEvents.length; i++) {
-      const evtTime = new Date(sessionDetailEvents[i].timestamp).getTime();
-      const diff = Math.abs(evtTime - scrollToActivityTime);
-      if (diff < closestDiff) { closestDiff = diff; closestIdx = i; }
-    }
-    setHighlightedActivityIdx(closestIdx);
-    setTimeout(() => {
-      const el = activityRefs.current.get(closestIdx);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    for (const evt of sessionDetailEvents) {
+      if (evt.eventType === 'agent_started') {
+        const instruction = String(evt.data.instruction || '');
+        if (instruction) items.push({ type: 'instruction', content: instruction });
+      } else if (evt.eventType === 'agent_reasoning_started' || evt.eventType === 'commander_reasoning_started') {
+        reasoningStartTime = new Date(evt.timestamp).getTime();
+      } else if (evt.eventType === 'agent_reasoning_completed' || evt.eventType === 'commander_reasoning_completed') {
+        const content = String(evt.data.content || evt.data.text || '');
+        const ms = reasoningStartTime ? new Date(evt.timestamp).getTime() - reasoningStartTime : 0;
+        const duration = ms > 0 ? (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(3)}s`) : '';
+        reasoningStartTime = null;
+        if (content) items.push({ type: 'reasoning', content, duration });
+      } else if (evt.eventType === 'agent_calling_tool' || evt.eventType === 'commander_calling_tool') {
+        const toolCallId = String(evt.data.toolCallId || evt.data.toolName || '');
+        pendingTools.set(toolCallId, {
+          toolName: String(evt.data.toolName || ''),
+          input: String(evt.data.input || evt.data.payload || ''),
+          time: new Date(evt.timestamp).getTime(),
+        });
+      } else if (evt.eventType === 'agent_tool_complete' || evt.eventType === 'commander_tool_complete') {
+        const toolCallId = String(evt.data.toolCallId || evt.data.toolName || '');
+        const start = pendingTools.get(toolCallId);
+        const ms = start ? new Date(evt.timestamp).getTime() - start.time : 0;
+        const duration = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(3)}s`;
+        items.push({
+          type: 'tool',
+          toolName: start?.toolName || String(evt.data.toolName || ''),
+          input: start?.input || '',
+          result: String(evt.data.result || evt.data.output || ''),
+          duration,
+        });
+        if (start) pendingTools.delete(toolCallId);
+      } else if (evt.eventType === 'agent_answer' || evt.eventType === 'commander_answer') {
+        const content = String(evt.data.content || evt.data.text || '');
+        if (content) items.push({ type: 'answer', content });
+      } else if (evt.eventType === 'agent_ask_commander') {
+        const content = String(evt.data.content || '');
+        if (content) items.push({ type: 'ask_commander', content });
+      } else if (evt.eventType === 'agent_commander_response') {
+        const content = String(evt.data.content || '');
+        if (content) items.push({ type: 'commander_response', content });
+      } else if (evt.eventType === 'compaction') {
+        items.push({
+          type: 'compaction',
+          entity: String(evt.data.entity || ''),
+          inputTokens: Number(evt.data.inputTokens || 0),
+          tokenLimit: Number(evt.data.tokenLimit || 0),
+          messagesCompacted: Number(evt.data.messagesCompacted || 0),
+        });
       }
-    }, 100);
-    // Clear highlight after 2s
-    setTimeout(() => setHighlightedActivityIdx(prev => prev === closestIdx ? null : prev), 2000);
-    setScrollToActivityTime(null);
-  }, [scrollToActivityTime, sessionDetailEvents]);
+    }
+    // Flush any unpaired tool calls
+    for (const [, pending] of pendingTools) {
+      items.push({ type: 'tool', toolName: pending.toolName, input: pending.input, result: '', duration: '' });
+    }
+    return items;
+  }, [sessionDetailEvents, selectedSessionId, allSessions, taskDetail]);
+
+
 
   // Simple percent: maps absolute time to percent of the full timeline
   const toPercent = useCallback((t: number) => {
@@ -1275,6 +1338,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
   const hasContent = allSessions.length > 0;
 
   return (
+    <>
     <div className="flex h-full">
       {/* Left: task list */}
       <div className="w-56 shrink-0 border-r overflow-y-auto">
@@ -1316,7 +1380,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
       {/* Center: gantt with time axis */}
       <div className="flex-1 relative min-h-0">
         {selectedTask ? (
-          <Tabs value={traceView} onValueChange={v => setTraceView(v as typeof traceView)} className="flex flex-col h-full gap-0">
+          <Tabs value={traceView} onValueChange={v => { setTraceView(v as typeof traceView); setSelection(null); }} className="flex flex-col h-full gap-0">
             {/* Header: tabs + iteration selector */}
             <div className="flex items-center gap-3 px-4 pt-2 pb-1 border-b border-border/50 shrink-0">
               <TabsList variant="line" className="h-7">
@@ -1333,6 +1397,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                 <TabsTrigger value="flamegraph" className="text-xs px-2 py-1">Trace</TabsTrigger>
                 <TabsTrigger value="table" className="text-xs px-2 py-1">Table</TabsTrigger>
                 <TabsTrigger value="turns" className="text-xs px-2 py-1">Turns</TabsTrigger>
+                <TabsTrigger value="events" className="text-xs px-2 py-1">Events</TabsTrigger>
               </TabsList>
             </div>
 
@@ -1496,7 +1561,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                         {selectedTask.startedAt && selectedTask.finishedAt && (
                           <>
                             <span className="text-muted-foreground">Duration</span>
-                            <span>{((new Date(selectedTask.finishedAt).getTime() - new Date(selectedTask.startedAt).getTime()) / 1000).toFixed(1)}s</span>
+                            <span>{((new Date(selectedTask.finishedAt).getTime() - new Date(selectedTask.startedAt).getTime()) / 1000).toFixed(3)}s</span>
                           </>
                         )}
                       </div>
@@ -1573,24 +1638,40 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                   borderTop
                 />
               )}
+              <div className="flex items-center gap-2 px-4 py-1.5 border-b shrink-0">
+                <Switch id="raw-output" checked={rawOutput} onCheckedChange={setRawOutput} className="scale-75" />
+                <label htmlFor="raw-output" className="text-[10px] text-muted-foreground cursor-pointer select-none">Raw JSON</label>
+              </div>
               <div className="flex-1 relative min-h-0">
               <div className="absolute inset-0 overflow-auto p-4 space-y-3">
                 {(() => {
                   if (outputs.length === 0) {
                     return <p className="text-sm text-muted-foreground">No output recorded.</p>;
                   }
+                  if (rawOutput) {
+                    return outputs.map((o: TaskOutputInfo) => (
+                      <div key={o.id} className="space-y-2">
+                        {o.datasetName != null && (
+                          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                            {o.datasetName}{o.datasetIndex != null ? ` #${o.datasetIndex + 1}` : ''}
+                          </div>
+                        )}
+                        {o.outputJson && (
+                          <pre className="text-xs bg-muted/50 rounded px-3 py-2 whitespace-pre-wrap">{
+                            (() => { try { return JSON.stringify(JSON.parse(o.outputJson), null, 2); } catch { return o.outputJson; } })()
+                          }</pre>
+                        )}
+                      </div>
+                    ));
+                  }
                   return outputs.map((o: TaskOutputInfo) => (
-                    <div key={o.id} className="space-y-2">
+                    <div key={o.id} className="space-y-3">
                       {o.datasetName != null && (
                         <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
                           {o.datasetName}{o.datasetIndex != null ? ` #${o.datasetIndex + 1}` : ''}
                         </div>
                       )}
-                      {o.outputJson && (
-                        <pre className="text-xs bg-muted/50 rounded px-3 py-2 overflow-x-auto whitespace-pre-wrap">{
-                          (() => { try { return JSON.stringify(JSON.parse(o.outputJson), null, 2); } catch { return o.outputJson; } })()
-                        }</pre>
-                      )}
+                      {o.outputJson && <OutputDisplay json={o.outputJson} />}
                     </div>
                   ));
                 })()}
@@ -1721,7 +1802,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                       const isExpanded = expandedTraceRows.has(row.id);
                       const hasChildren = row.children.length > 0;
                       const rowMs = row.end - row.start;
-                      const rowDurLabel = rowMs < 1000 ? `${Math.round(rowMs)}ms` : `${(rowMs / 1000).toFixed(1)}s`;
+                      const rowDurLabel = rowMs < 1000 ? `${Math.round(rowMs)}ms` : `${(rowMs / 1000).toFixed(3)}s`;
                       const isRowSelected = (row.sessionId && selection?.type === 'session' && selection.sessionId === row.sessionId)
                         || (row.category === 'agent' && selection?.type === 'session' && selection.agentName && row.label === selection.agentName);
 
@@ -1760,7 +1841,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                             </div>
                             {/* Timeline area */}
                             <div
-                              className="flex-1 relative h-full cursor-pointer pr-4"
+                              className="flex-1 relative h-full cursor-pointer overflow-hidden"
                               onClick={() => {
                                 if (row.category === 'agent') {
                                   const clickSessions = isParallelIteration && selectedIteration != null ? sessions : allSessions;
@@ -1782,40 +1863,52 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                                 const sLeft = Math.max(0, segLeft);
                                 const sWidth = Math.min(100 - sLeft, Math.max(0.3, segLeft + segWidth - sLeft));
                                 return (
-                                  <div key={`seg-${si}`} className="absolute top-1.5 bottom-1.5 flex items-center overflow-hidden" style={{
+                                  <div key={`seg-${si}`} className="absolute top-1.5 bottom-1.5 overflow-hidden" style={{
                                     left: `${sLeft}%`, width: `${sWidth}%`, minWidth: '4px',
                                     backgroundColor: SPAN_COLORS_HEX[row.category],
                                     borderRadius: '4px',
                                   }}>
-                                    {si === 0 && (
-                                      <span className="text-[10px] text-white font-medium pl-2 truncate pointer-events-none whitespace-nowrap">
-                                        {row.label}
-                                      </span>
-                                    )}
-                                    {si === 0 && clampedWidth > 10 && (
-                                      <span className="text-[9px] text-white/70 ml-1.5 pr-2 shrink-0 pointer-events-none">{rowDurLabel}</span>
-                                    )}
+                                    <div className="relative flex items-center h-full">
+                                      {si === 0 && (
+                                        <span className="text-[10px] text-white font-medium pl-2 truncate pointer-events-none whitespace-nowrap relative z-10">
+                                          {row.label}
+                                        </span>
+                                      )}
+                                      {si === 0 && clampedWidth > 10 && (
+                                        <span className="text-[9px] text-white/70 ml-1.5 pr-2 shrink-0 pointer-events-none relative z-10">{rowDurLabel}</span>
+                                      )}
+                                      {/* Reasoning ranges inside span */}
+                                      {si === 0 && reasoningRanges.get(row.id)?.map((range, ri) => {
+                                        const spanStart = row.segments?.[0]?.start ?? row.start;
+                                        const spanEnd = row.segments?.[row.segments.length - 1]?.end ?? row.end;
+                                        const spanDur = spanEnd - spanStart;
+                                        if (spanDur <= 0) return null;
+                                        const pctLeft = ((range.start - spanStart) / spanDur) * 100;
+                                        const pctWidth = ((range.end - range.start) / spanDur) * 100;
+                                        if (pctLeft > 100 || pctLeft + pctWidth < 0) return null;
+                                        const cLeft = Math.max(0, pctLeft);
+                                        const cWidth = Math.min(100 - cLeft, Math.max(0.5, pctWidth));
+                                        const isAtStart = cLeft <= 0.5;
+                                        const isAtEnd = cLeft + cWidth >= 99.5;
+                                        const radius = isAtStart && isAtEnd ? 'rounded' :
+                                          isAtStart ? 'rounded-l' :
+                                          isAtEnd ? 'rounded-r' : '';
+                                        return (
+                                          <div
+                                            key={`r-${ri}`}
+                                            className={cn('absolute top-0 bottom-0 bg-blue-300/20 cursor-pointer', radius)}
+                                            style={{ left: `${cLeft}%`, width: `${cWidth}%` }}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              if (row.sessionId) {
+                                                setSelection({ type: 'session', sessionId: row.sessionId });
+                                              }
+                                            }}
+                                          />
+                                        );
+                                      })}
+                                    </div>
                                   </div>
-                                );
-                              })}
-                              {/* Reasoning ranges — lighter bars within the span */}
-                              {reasoningRanges.get(row.id)?.map((range, ri) => {
-                                const rLeft = toPercent(range.start);
-                                const rWidth = toPercent(range.end) - rLeft;
-                                if (rLeft > 101 || rLeft + rWidth < -1) return null;
-                                return (
-                                  <div
-                                    key={`r-${ri}`}
-                                    className="absolute top-1.5 bottom-1.5 bg-white/20 hover:bg-white/30 cursor-pointer z-10 rounded-sm"
-                                    style={{ left: `${Math.max(0, rLeft)}%`, width: `${Math.max(0.2, rWidth)}%` }}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (row.sessionId) {
-                                        setSelection({ type: 'session', sessionId: row.sessionId });
-                                        setScrollToActivityTime(range.start);
-                                      }
-                                    }}
-                                  />
                                 );
                               })}
                             </div>
@@ -1824,7 +1917,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                           {/* Expanded child tool call rows */}
                           {isExpanded && row.children.map(child => {
                             const childMs = child.end - child.start;
-                            const childDurLabel = childMs < 1000 ? `${Math.round(childMs)}ms` : `${(childMs / 1000).toFixed(1)}s`;
+                            const childDurLabel = childMs < 1000 ? `${Math.round(childMs)}ms` : `${(childMs / 1000).toFixed(3)}s`;
                             const childLeft = toPercent(child.start);
                             const childWidth = toPercent(child.end) - childLeft;
                             if (childLeft + childWidth < -1 || childLeft > 101) return null;
@@ -1845,7 +1938,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                                 </div>
                                 {/* Timeline area */}
                                 <div
-                                  className="flex-1 relative h-full cursor-pointer pr-4"
+                                  className="flex-1 relative h-full cursor-pointer overflow-hidden"
                                   onClick={() => {
                                     if (child.toolResult) setSelection({ type: 'tool', toolResult: child.toolResult, spanId: child.id });
                                   }}
@@ -1894,9 +1987,15 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
               {!hasContent ? (
                 <p className="text-sm text-muted-foreground p-4">No sessions recorded for this task.</p>
               ) : (
-              <div className="flex-1 relative min-h-0">
-              <div className="absolute inset-0 overflow-auto">
-                <table className="w-full text-xs">
+              <div className="flex-1 relative min-h-0 overflow-hidden">
+              <div className="absolute inset-0 overflow-y-auto overflow-x-hidden">
+                <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
+                  <colgroup>
+                    <col className="w-[30%]" />
+                    <col className="w-[40%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[15%]" />
+                  </colgroup>
                   <thead className="sticky top-0 bg-background z-10">
                     <tr className="border-b text-left text-muted-foreground">
                       <th className="px-3 py-1.5 font-medium">Type</th>
@@ -1910,9 +2009,9 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                       const isCollapsed = collapsedRows.has(row.id);
                       const hasChildren = row.children.length > 0;
                       const offsetMs = row.start - ganttStart;
-                      const offsetLabel = offsetMs < 1000 ? `+${Math.round(offsetMs)}ms` : `+${(offsetMs / 1000).toFixed(1)}s`;
+                      const offsetLabel = offsetMs < 1000 ? `+${Math.round(offsetMs)}ms` : `+${(offsetMs / 1000).toFixed(3)}s`;
                       const durMs = row.end - row.start;
-                      const durLabel = durMs <= 0 ? '<1ms' : durMs < 1000 ? `${Math.round(durMs)}ms` : `${(durMs / 1000).toFixed(1)}s`;
+                      const durLabel = durMs <= 0 ? '<1ms' : durMs < 1000 ? `${Math.round(durMs)}ms` : `${(durMs / 1000).toFixed(3)}s`;
                       const isRowSelected = (row.sessionId && selection?.type === 'session' && selection.sessionId === row.sessionId)
                         || (row.category === 'agent' && selection?.type === 'session' && selection.agentName && row.label === selection.agentName);
 
@@ -1954,15 +2053,15 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                               <span className={cn('inline-block w-2 h-2 rounded-full mr-1.5', SPAN_COLORS[row.category])} />
                               {row.category === 'commander' ? 'Commander' : 'Agent'}
                             </td>
-                            <td className="px-3 py-1.5 font-mono">{row.label}</td>
+                            <td className="px-3 py-1.5 font-mono truncate">{row.label}</td>
                             <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{offsetLabel}</td>
                             <td className="px-3 py-1.5 text-right tabular-nums">{durLabel}</td>
                           </tr>
                           {!isCollapsed && row.children.map(child => {
                             const cOffsetMs = child.start - ganttStart;
-                            const cOffsetLabel = cOffsetMs < 1000 ? `+${Math.round(cOffsetMs)}ms` : `+${(cOffsetMs / 1000).toFixed(1)}s`;
+                            const cOffsetLabel = cOffsetMs < 1000 ? `+${Math.round(cOffsetMs)}ms` : `+${(cOffsetMs / 1000).toFixed(3)}s`;
                             const cDurMs = child.end - child.start;
-                            const cDurLabel = cDurMs <= 0 ? '<1ms' : cDurMs < 1000 ? `${Math.round(cDurMs)}ms` : `${(cDurMs / 1000).toFixed(1)}s`;
+                            const cDurLabel = cDurMs <= 0 ? '<1ms' : cDurMs < 1000 ? `${Math.round(cDurMs)}ms` : `${(cDurMs / 1000).toFixed(3)}s`;
                             const isChildSelected = child.toolResult && selection?.type === 'tool' && (selection.spanId ? selection.spanId === child.id : selection.toolResult.id === child.toolResult.id);
                             return (
                               <tr
@@ -1980,7 +2079,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                                   <span className={cn('inline-block w-2 h-2 rounded-full mr-1.5', SPAN_COLORS[child.category])} />
                                   Tool
                                 </td>
-                                <td className="px-3 py-1.5 font-mono">{child.label}</td>
+                                <td className="px-3 py-1.5 font-mono truncate">{child.label}</td>
                                 <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{cOffsetLabel}</td>
                                 <td className="px-3 py-1.5 text-right tabular-nums">{cDurLabel}</td>
                               </tr>
@@ -2106,7 +2205,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                                 <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{cacheRead > 0 ? fmtNum(cacheRead) : '—'}</td>
                                 <td className="px-2 py-1 text-right tabular-nums">{e.userMessages}/{e.assistantMessages}/{e.systemMessages}</td>
                                 <td className="px-2 py-1 text-right tabular-nums">{fmtBytes(e.payloadBytes)}</td>
-                                <td className="px-2 py-1 text-right tabular-nums">{(e.turnDurationMs / 1000).toFixed(1)}s</td>
+                                <td className="px-2 py-1 text-right tabular-nums">{(e.turnDurationMs / 1000).toFixed(3)}s</td>
                               </tr>
                             );
                           })}
@@ -2123,7 +2222,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                             </td>
                             <td className="px-2 py-1.5 text-right tabular-nums">—</td>
                             <td className="px-2 py-1.5 text-right tabular-nums">{fmtBytes(totals.payloadBytes)}</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums">{(totals.duration / 1000).toFixed(1)}s</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{(totals.duration / 1000).toFixed(3)}s</td>
                           </tr>
                         </tbody>
                       </table>
@@ -2131,6 +2230,23 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                   </div>
                 );
               })()}
+            </TabsContent>
+
+            {/* Events view — task-filtered event log */}
+            <TabsContent value="events" className="flex-1 relative min-h-0 m-0">
+              <div className="flex-1 relative min-h-0 h-full">
+                <div className="absolute inset-0 overflow-y-auto px-4 py-2">
+                  {taskEvents.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-4">No events.</p>
+                  ) : (
+                    taskEvents
+                      .filter(e => !VERBOSE_EVENTS.has(e.eventType))
+                      .map((e, i) => (
+                        <EventLogRow key={i} event={{ eventType: e.eventType, data: e.data, timestamp: e.createdAt }} />
+                      ))
+                  )}
+                </div>
+              </div>
             </TabsContent>
           </Tabs>
         ) : selectedTaskConfig ? (
@@ -2204,14 +2320,33 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
       </div>
 
       {/* Right: detail panel */}
-      {selection && (
-        <div className="w-96 shrink-0 border-l overflow-y-auto">
-          <div className="p-3 border-b">
+      {selection && (traceView === 'flamegraph' || traceView === 'table') && (
+        <div className="w-96 shrink-0 border-l flex flex-col overflow-hidden">
+          <div className="p-3 border-b shrink-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium">
                 {selection.type === 'session' ? 'Session Detail' : 'Tool Call Detail'}
               </span>
-              <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[10px]" onClick={() => setSelection(null)}>Close</Button>
+              <div className="flex items-center gap-1">
+                {selection.type === 'session' && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-5 w-5 p-0">
+                        <MoreHorizontal className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="text-xs">
+                      <DropdownMenuItem onClick={() => setSessionModal({ type: 'system', sessionId: selection.sessionId })}>
+                        View System Prompts
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setSessionModal({ type: 'messages', sessionId: selection.sessionId })}>
+                        View Raw Messages
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[10px]" onClick={() => setSelection(null)}>Close</Button>
+              </div>
             </div>
             {selection.type === 'session' && (() => {
               const s = allSessions.find(s => s.id === selection.sessionId);
@@ -2236,130 +2371,126 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                     {tr.toolName}
                   </Badge>
                   <span>by {caller}</span>
-                  <span>{ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`}</span>
+                  <span>{ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(3)}s`}</span>
                 </div>
               );
             })()}
           </div>
 
-          {/* Session detail with tabs */}
+         <div className="overflow-y-auto min-h-0 flex-1">
+          {/* Session detail panel */}
           {selection.type === 'session' && (
-            <Tabs value={detailPanelTab} onValueChange={setDetailPanelTab} className="w-full">
-              <div className="px-3 pt-1">
-                <TabsList variant="line" className="w-full">
-                  <TabsTrigger value="activity" className="text-[10px]">Activity</TabsTrigger>
-                  <TabsTrigger value="messages" className="text-[10px]">Messages</TabsTrigger>
-                  <TabsTrigger value="system" className="text-[10px]">System</TabsTrigger>
-                </TabsList>
-              </div>
-              <TabsContent value="activity" className="p-3 space-y-2 mt-0">
-                {sessionDetailEvents.length > 0 ? (
-                  sessionDetailEvents.map((evt, i) => {
-                    const refCb = (el: HTMLElement | null) => { if (el) activityRefs.current.set(i, el as HTMLDivElement); };
-                    const isHighlighted = highlightedActivityIdx === i;
-                    if (evt.eventType === 'agent_reasoning_completed' || evt.eventType === 'commander_reasoning_completed') {
-                      return (
-                        <details key={i} ref={refCb as React.Ref<HTMLDetailsElement>} className={cn("group rounded transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
-                          <summary className="text-[10px] text-violet-500 cursor-pointer font-medium">Thinking...</summary>
-                          <p className="text-[10px] text-muted-foreground mt-1 whitespace-pre-wrap max-h-32 overflow-y-auto">
-                            {String(evt.data.content || evt.data.text || '')}
-                          </p>
-                        </details>
-                      );
-                    }
-                    if (evt.eventType === 'agent_calling_tool' || evt.eventType === 'commander_calling_tool') {
-                      return (
-                        <details key={i} ref={refCb as React.Ref<HTMLDetailsElement>} className={cn("border rounded p-2 transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
-                          <summary className="text-[10px] font-medium cursor-pointer flex items-center gap-1">
-                            <span className="text-yellow-600">Tool:</span> {String(evt.data.toolName)}
-                            {toolDurations.has(i) && <span className="text-muted-foreground font-normal ml-auto">{toolDurations.get(i)}</span>}
-                          </summary>
-                          <div className="mt-1 space-y-1">
-                            {!!(evt.data.input || evt.data.payload) && (
-                              <div>
-                                <span className="text-[10px] text-muted-foreground">Input:</span>
-                                <pre className="text-[10px] bg-muted/50 rounded p-1 mt-0.5 overflow-x-auto max-h-24 overflow-y-auto">
-                                  {String(evt.data.input || evt.data.payload)}
-                                </pre>
-                              </div>
-                            )}
-                          </div>
-                        </details>
-                      );
-                    }
-                    if (evt.eventType === 'agent_tool_complete' || evt.eventType === 'commander_tool_complete') {
-                      return (
-                        <details key={i} ref={refCb as React.Ref<HTMLDetailsElement>} className={cn("border rounded p-2 transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
-                          <summary className="text-[10px] font-medium cursor-pointer flex items-center gap-1">
-                            <span className="text-green-600">Result:</span> {String(evt.data.toolName)}
-                            {toolDurations.has(i) && <span className="text-muted-foreground font-normal ml-auto">{toolDurations.get(i)}</span>}
-                          </summary>
-                          {!!(evt.data.result || evt.data.output) && (
-                            <pre className="text-[10px] bg-muted/50 rounded p-1 mt-1 overflow-x-auto max-h-24 overflow-y-auto">
-                              {String(evt.data.result || evt.data.output)}
-                            </pre>
+            <div className="px-3 py-2">
+              {sessionItems.length > 0 ? (
+                <div className="relative">
+                  {sessionItems.map((item, i) => {
+                    const isLast = i === sessionItems.length - 1;
+                    const dotColor =
+                      item.type === 'instruction' ? 'bg-purple-400' :
+                      item.type === 'reasoning' ? 'bg-blue-400' :
+                      item.type === 'tool' ? 'bg-teal-400' :
+                      item.type === 'ask_commander' ? 'bg-emerald-400' :
+                      item.type === 'commander_response' ? 'bg-emerald-400' :
+                      item.type === 'answer' ? 'bg-emerald-400' :
+                      item.type === 'compaction' ? 'bg-violet-400' :
+                      'bg-foreground';
+                    const lineColor = 'bg-border';
+
+                    return (
+                      <div key={i} className="relative flex gap-3">
+                        {/* Timeline: dot + connecting line */}
+                        <div className="relative shrink-0 w-3 flex justify-center">
+                          <div className={cn('size-2.5 rounded-full mt-1 relative z-10', dotColor)} />
+                          {!isLast && <div className={cn('absolute top-3 -bottom-3 left-1/2 -translate-x-1/2 w-px', lineColor)} />}
+                        </div>
+
+                        {/* Content */}
+                        <div className="flex-1 min-w-0 pb-3">
+                          {item.type === 'instruction' && (
+                            <p className="text-[11px] text-purple-400 italic leading-relaxed line-clamp-3">
+                              {item.content}
+                            </p>
                           )}
-                        </details>
-                      );
-                    }
-                    if (evt.eventType === 'agent_answer' || evt.eventType === 'commander_answer') {
-                      return (
-                        <div key={i} ref={refCb} className={cn("border-l-2 border-green-500 pl-2 rounded transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
-                          <span className="text-[10px] font-medium text-green-600">Final Answer</span>
-                          <p className="text-xs text-foreground mt-0.5 whitespace-pre-wrap">
-                            {String(evt.data.content || evt.data.text || '')}
-                          </p>
+                          {item.type === 'reasoning' && (
+                            <details className="group" onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) requestAnimationFrame(() => (e.target as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'smooth' })); }}>
+                              <summary className="text-[11px] text-muted-foreground cursor-pointer font-medium flex items-center gap-1.5 select-none">
+                                Reasoning
+                                <svg className="size-3 text-muted-foreground/40 transition-transform group-open:rotate-90 shrink-0" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5V3z"/></svg>
+                                {item.duration && <span className="text-muted-foreground/50 font-normal ml-auto text-[10px] tabular-nums">{item.duration}</span>}
+                              </summary>
+                              <p className="text-[11px] text-muted-foreground whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed mt-1">
+                                {item.content}
+                              </p>
+                            </details>
+                          )}
+                          {item.type === 'tool' && (
+                            <details className="group" onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) requestAnimationFrame(() => (e.target as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'smooth' })); }}>
+                              <summary className="text-[11px] text-muted-foreground cursor-pointer font-medium flex items-center gap-1.5 select-none">
+                                <span className="font-mono text-[10px]">{item.toolName}</span>
+                                <svg className="size-3 text-muted-foreground/40 transition-transform group-open:rotate-90 shrink-0" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5V3z"/></svg>
+                                {item.duration && <span className="text-muted-foreground/50 font-normal ml-auto text-[10px] tabular-nums">{item.duration}</span>}
+                              </summary>
+                              <div className="mt-1.5 space-y-2">
+                                {item.input && (
+                                  <div>
+                                    <span className="text-[10px] text-muted-foreground/60 font-medium uppercase tracking-wider">Input</span>
+                                    <pre className="text-[10px] text-muted-foreground bg-muted/40 rounded p-2 mt-0.5 overflow-x-auto max-h-32 overflow-y-auto font-mono leading-relaxed">
+                                      {item.input}
+                                    </pre>
+                                  </div>
+                                )}
+                                {item.result && (
+                                  <div>
+                                    <span className="text-[10px] text-muted-foreground/60 font-medium uppercase tracking-wider">Result</span>
+                                    <pre className="text-[10px] text-muted-foreground bg-muted/40 rounded p-2 mt-0.5 overflow-x-auto max-h-32 overflow-y-auto font-mono leading-relaxed">
+                                      {item.result}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            </details>
+                          )}
+                          {item.type === 'answer' && (
+                            <p className="text-[11px] text-foreground whitespace-pre-wrap leading-relaxed">
+                              {item.content}
+                            </p>
+                          )}
+                          {item.type === 'ask_commander' && (
+                            <details className="group" onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) requestAnimationFrame(() => (e.target as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'smooth' })); }}>
+                              <summary className="text-[11px] text-muted-foreground cursor-pointer font-medium flex items-center gap-1.5 select-none">
+                                Ask Commander
+                                <svg className="size-3 text-muted-foreground/40 transition-transform group-open:rotate-90 shrink-0" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5V3z"/></svg>
+                              </summary>
+                              <p className="text-[11px] text-muted-foreground whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed mt-1">
+                                {item.content}
+                              </p>
+                            </details>
+                          )}
+                          {item.type === 'commander_response' && (
+                            <details className="group" onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) requestAnimationFrame(() => (e.target as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'smooth' })); }}>
+                              <summary className="text-[11px] text-muted-foreground cursor-pointer font-medium flex items-center gap-1.5 select-none">
+                                Commander Response
+                                <svg className="size-3 text-muted-foreground/40 transition-transform group-open:rotate-90 shrink-0" viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5V3z"/></svg>
+                              </summary>
+                              <p className="text-[11px] text-muted-foreground whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed mt-1">
+                                {item.content}
+                              </p>
+                            </details>
+                          )}
+                          {item.type === 'compaction' && (
+                            <p className="text-[10px] text-violet-400/80 italic">
+                              Context compacted — {item.messagesCompacted} messages removed ({item.inputTokens.toLocaleString()}/{item.tokenLimit.toLocaleString()} tokens)
+                            </p>
+                          )}
                         </div>
-                      );
-                    }
-                    if (evt.eventType === 'agent_started' || evt.eventType === 'agent_completed') {
-                      return (
-                        <div key={i} ref={refCb} className={cn("text-[10px] text-muted-foreground flex items-center gap-1 rounded transition-shadow", isHighlighted && "ring-2 ring-primary/50")}>
-                          <span className={evt.eventType === 'agent_started' ? 'text-blue-500' : 'text-green-500'}>
-                            {evt.eventType === 'agent_started' ? 'Agent started' : 'Agent completed'}
-                          </span>
-                          <span>({String(evt.data.agentName)})</span>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })
-                ) : (
-                  <p className="text-[10px] text-muted-foreground">No activity recorded.</p>
-                )}
-              </TabsContent>
-              <TabsContent value="messages" className="p-3 space-y-2 mt-0">
-                {sessionMessages?.messages?.length ? (
-                  sessionMessages.messages.filter(msg => msg.role !== 'system').map(msg => (
-                    <div key={msg.id} className="border-l-2 pl-2 mb-2" style={{ borderColor: msg.role === 'user' ? '#6366f1' : '#22c55e' }}>
-                      <span className="text-[10px] font-medium">{msg.role}</span>
-                      <p className="text-xs text-muted-foreground whitespace-pre-wrap mt-0.5">{msg.content}</p>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-[10px] text-muted-foreground">No messages recorded.</p>
-                )}
-              </TabsContent>
-              <TabsContent value="system" className="p-3 space-y-2 mt-0">
-                {(() => {
-                  const systemMsgs = sessionMessages?.messages?.filter(msg => msg.role === 'system') ?? [];
-                  return systemMsgs.length > 0 ? (
-                    systemMsgs.map((msg, i) => (
-                      <details key={msg.id} open={i === 0} className="border rounded p-2">
-                        <summary className="text-[10px] font-medium cursor-pointer text-muted-foreground">
-                          System prompt {systemMsgs.length > 1 ? `${i + 1}/${systemMsgs.length}` : ''}
-                        </summary>
-                        <pre className="text-[10px] text-muted-foreground whitespace-pre-wrap mt-1 max-h-96 overflow-y-auto">
-                          {msg.content}
-                        </pre>
-                      </details>
-                    ))
-                  ) : (
-                    <p className="text-[10px] text-muted-foreground">No system prompts recorded.</p>
-                  );
-                })()}
-              </TabsContent>
-            </Tabs>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">No events recorded.</p>
+              )}
+            </div>
           )}
 
           <div className="p-3 space-y-2">
@@ -2381,7 +2512,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                   </div>
                   <div>
                     <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Duration</span>
-                    <p className="text-sm mt-0.5">{ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`}</p>
+                    <p className="text-sm mt-0.5">{ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(3)}s`}</p>
                   </div>
                   {tr.inputParams && (
                     <div>
@@ -2403,9 +2534,17 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
               );
             })()}
           </div>
+         </div>
         </div>
       )}
     </div>
+
+    <SessionMessagesModal
+      instanceId={instanceId}
+      modal={sessionModal}
+      onClose={() => setSessionModal(null)}
+    />
+    </>
   );
 }
 
@@ -2415,6 +2554,82 @@ interface NormalizedEvent {
   eventType: string;
   data: Record<string, unknown>;
   timestamp: string;
+}
+
+function OutputDisplay({ json }: { json: string }) {
+  let parsed: unknown;
+  try { parsed = JSON.parse(json); } catch { parsed = json; }
+
+  // Plain string — render as markdown
+  if (typeof parsed === 'string') {
+    return <MarkdownPreview content={parsed} className="p-0 text-sm" />;
+  }
+
+  // Object — render each field in its own card
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const entries = Object.entries(parsed as Record<string, unknown>);
+    return (
+      <div className="space-y-3">
+        {entries.map(([key, value]) => (
+          <div key={key} className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
+            <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">{key.replace(/_/g, ' ')}</div>
+            {typeof value === 'string' ? (
+              <MarkdownPreview content={value} className="p-0 text-sm" />
+            ) : typeof value === 'boolean' ? (
+              <span className="text-sm">{value ? 'Yes' : 'No'}</span>
+            ) : typeof value === 'number' ? (
+              <span className="text-sm tabular-nums">{value}</span>
+            ) : Array.isArray(value) && value.every(v => typeof v === 'string' || typeof v === 'number') ? (
+              <div className="flex flex-wrap gap-1.5 mt-0.5">
+                {value.map((v, i) => (
+                  <span key={i} className="text-xs bg-muted/60 border border-border/40 rounded px-2 py-0.5">{String(v)}</span>
+                ))}
+              </div>
+            ) : (
+              <pre className="text-xs bg-muted/50 rounded px-3 py-2 whitespace-pre-wrap mt-1">{JSON.stringify(value, null, 2)}</pre>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Fallback — formatted JSON
+  return <pre className="text-xs bg-muted/50 rounded px-3 py-2 whitespace-pre-wrap">{JSON.stringify(parsed, null, 2)}</pre>;
+}
+
+function EventLogRow({ event }: { event: NormalizedEvent }) {
+  const [expanded, setExpanded] = useState(false);
+  const color = getEventColor(event.eventType);
+  const summary = formatEventSummary(event.eventType, event.data);
+  const content = getEventExpandableContent(event.eventType, event.data);
+  const hasContent = !!content;
+
+  const ts = new Date(event.timestamp);
+  const time = ts.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    + '.' + String(ts.getMilliseconds()).padStart(3, '0');
+
+  return (
+    <div className="py-1">
+      <div
+        className={cn('flex gap-2 text-[11px] font-mono leading-relaxed', hasContent && 'cursor-pointer')}
+        onClick={hasContent ? () => setExpanded(e => !e) : undefined}
+      >
+        <span className="text-muted-foreground/50 shrink-0">[{time}]</span>
+        <span className={color}>
+          {summary}
+          {hasContent && (
+            <svg className={cn('inline size-3 ml-1 text-muted-foreground transition-transform', expanded && 'rotate-90')} viewBox="0 0 16 16" fill="currentColor"><path d="M6 3l5 5-5 5V3z"/></svg>
+          )}
+        </span>
+      </div>
+      {expanded && content && (
+        <pre className="text-[10px] text-muted-foreground/70 font-mono whitespace-pre-wrap leading-relaxed mt-1 ml-[4.5rem] border-l border-border/50 pl-3 max-h-64 overflow-y-auto">
+          {content}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 function EventsTab({ instanceId, missionId, isRunning }: { instanceId: string; missionId: string; isRunning: boolean }) {
@@ -2489,20 +2704,20 @@ function EventsTab({ instanceId, missionId, isRunning }: { instanceId: string; m
   }, [displayEvents, isRunning]);
 
   return (
-    <div ref={eventLogRef} className="h-full overflow-y-auto p-3 space-y-0.5">
-      {displayEvents.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No events.</p>
-      ) : (
-        displayEvents.map((event, i) => (
-          <div key={i} className={cn('px-2 py-1 rounded text-[11px] font-mono', getEventBg(event.eventType))}>
-            <span className="text-muted-foreground">[{event.eventType}]</span>{' '}
-            {formatEventText(event.eventType, event.data)}
-          </div>
-        ))
-      )}
-      {isRunning && (
-        <div className="text-[10px] text-blue-500 animate-pulse px-2">live...</div>
-      )}
+    <div className="h-full flex flex-col">
+      <div className="flex items-center justify-between px-4 py-2 border-b shrink-0">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Event Log</span>
+        {isRunning && <span className="text-[10px] text-purple-400 animate-pulse">Real-time Stream</span>}
+      </div>
+      <div ref={eventLogRef} className="flex-1 overflow-y-auto px-4 py-2">
+        {displayEvents.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-4">No events.</p>
+        ) : (
+          displayEvents.map((event, i) => (
+            <EventLogRow key={i} event={event} />
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -2883,5 +3098,93 @@ export function MissionInstanceDetail() {
         </Tabs>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Session Messages / System Prompts Modal
+// ---------------------------------------------------------------------------
+
+const MAX_LINES = 15;
+
+function CollapsiblePre({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = content.split('\n');
+  const needsTruncation = lines.length > MAX_LINES;
+  const displayed = expanded || !needsTruncation ? content : lines.slice(0, MAX_LINES).join('\n');
+
+  return (
+    <div>
+      <pre className="text-[11px] text-muted-foreground bg-muted/30 rounded p-3 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed">
+        {displayed}
+      </pre>
+      {needsTruncation && (
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="text-[10px] text-muted-foreground/60 hover:text-muted-foreground mt-1 cursor-pointer"
+        >
+          {expanded ? '▲ Collapse' : `▼ Show all ${lines.length} lines`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SessionMessagesModal({
+  instanceId,
+  modal,
+  onClose,
+}: {
+  instanceId: string;
+  modal: { type: 'messages' | 'system'; sessionId: string } | null;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['chatMessages', instanceId, modal?.sessionId],
+    queryFn: () => getChatMessages(instanceId, modal!.sessionId),
+    enabled: !!modal,
+  });
+
+  const messages = data?.messages ?? [];
+  const filtered = modal?.type === 'system'
+    ? messages.filter(m => m.role === 'system')
+    : messages.filter(m => m.role !== 'system');
+
+  const roleColor = (role: string) =>
+    role === 'system' ? 'text-purple-400' :
+    role === 'assistant' ? 'text-emerald-400' :
+    role === 'user' ? 'text-sky-400' : 'text-muted-foreground';
+
+  return (
+    <Dialog open={!!modal} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="text-sm">
+            {modal?.type === 'system' ? 'System Prompts' : 'Raw Messages'}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="overflow-y-auto flex-1 min-h-0 space-y-3">
+          {isLoading && <p className="text-xs text-muted-foreground">Loading...</p>}
+          {!isLoading && filtered.length === 0 && (
+            <p className="text-xs text-muted-foreground">No messages found.</p>
+          )}
+          {filtered.map((msg, i) => (
+            <div key={i} className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className={cn('text-[10px] font-medium uppercase tracking-wider', roleColor(msg.role))}>
+                  {msg.role}
+                </span>
+                {msg.createdAt && (
+                  <span className="text-[10px] text-muted-foreground/50 tabular-nums">
+                    {new Date(msg.createdAt).toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
+              <CollapsiblePre content={msg.content} />
+            </div>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
