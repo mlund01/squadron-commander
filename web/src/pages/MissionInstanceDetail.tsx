@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { StatusBadge, formatTime, formatDuration } from '@/lib/mission-utils';
 import { useResizablePanel } from '@/hooks/use-resizable-panel';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { ZoomControls } from '@/components/zoom-controls';
 import type { TaskInfo, MissionEvent, MissionTaskRecord, ToolResultDTO, TaskOutputInfo, SubtaskInfo, DatasetItemInfo } from '@/api/types';
 import { RouterEdge } from '@/components/RouterEdge';
@@ -726,6 +727,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
   const [expandedTraceRows, setExpandedTraceRows] = useState<Set<string>>(new Set());
   const [turnsEntityFilter, setTurnsEntityFilter] = useState('all');
   const [sessionModal, setSessionModal] = useState<{ type: 'messages' | 'system'; sessionId: string } | null>(null);
+  const { width: detailPanelWidth, handleResizeStart: handleDetailResizeStart } = useHorizontalResize({ initialWidth: 384, minWidth: 240, maxWidth: 700 });
 
   const selectedSessionId = selection?.type === 'session' ? selection.sessionId : null;
 
@@ -1943,60 +1945,89 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                             </div>
                           </div>
 
-                          {/* Expanded child tool call rows */}
-                          {isExpanded && row.children.map(child => {
-                            const childMs = child.end - child.start;
-                            const childDurLabel = childMs < 1000 ? `${Math.round(childMs)}ms` : `${(childMs / 1000).toFixed(3)}s`;
-                            const childLeft = toPercent(child.start);
-                            const childWidth = toPercent(child.end) - childLeft;
-                            if (childLeft + childWidth < -1 || childLeft > 101) return null;
-                            const cLeft = Math.max(0, childLeft);
-                            const cWidth = Math.min(100 - cLeft, Math.max(0.3, childLeft + childWidth - cLeft));
-                            const isChildSelected = child.toolResult && selection?.type === 'tool' && (selection.spanId ? selection.spanId === child.id : selection.toolResult.id === child.toolResult.id);
+                          {/* Expanded child tool call rows — grouped by tool name */}
+                          {isExpanded && (() => {
+                            // Group children by label (tool name)
+                            const grouped = new Map<string, typeof row.children>();
+                            for (const child of row.children) {
+                              const group = grouped.get(child.label);
+                              if (group) group.push(child);
+                              else grouped.set(child.label, [child]);
+                            }
+                            return [...grouped.entries()].map(([toolName, spans]) => {
+                              const totalMs = spans.reduce((sum, s) => sum + (s.end - s.start), 0);
+                              const groupDurLabel = totalMs < 1000 ? `${Math.round(totalMs)}ms` : `${(totalMs / 1000).toFixed(3)}s`;
+                              const anySelected = spans.some(child =>
+                                child.toolResult && selection?.type === 'tool' && (selection.spanId ? selection.spanId === child.id : selection.toolResult.id === child.toolResult.id)
+                              );
+                              const category = spans[0].category;
 
-                            return (
-                              <div key={child.id} className={cn(
-                                'flex items-center h-8 border-b border-border/10 hover:bg-muted/20 transition-colors',
-                                isChildSelected && 'bg-muted/40',
-                              )}>
-                                {/* Left label area — indented */}
-                                <div className="w-[200px] shrink-0 flex items-center gap-1.5 pl-10 pr-3 overflow-hidden">
-                                  <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', SPAN_COLORS[child.category])} />
-                                  <span className="text-[11px] text-muted-foreground font-mono truncate">{child.label}()</span>
-                                  <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0 ml-auto">{childDurLabel}</span>
-                                </div>
-                                {/* Timeline area */}
-                                <div
-                                  className="flex-1 relative h-full cursor-pointer overflow-hidden"
-                                  onClick={() => {
-                                    if (child.toolResult) setSelection({ type: 'tool', toolResult: child.toolResult, spanId: child.id });
-                                  }}
-                                >
-                                  {/* Gridlines */}
-                                  {ticks.map((tick, i) => (
-                                    <div key={i} className="absolute top-0 h-full w-px bg-border/10" style={{ left: `${tick.pct}%` }} />
-                                  ))}
-                                  {/* Stop/resume markers */}
-                                  {resumeBreaks.map((t, i) => {
-                                    const pct = toPercent(t);
-                                    if (pct < 0 || pct > 100) return null;
-                                    return <div key={`brk-${i}`} className="absolute top-0 h-full w-px bg-orange-400/50 z-20" style={{ left: `${pct}%` }} />;
-                                  })}
-                                  {/* Tool span bar */}
-                                  <div className="absolute top-1.5 bottom-1.5 flex items-center overflow-hidden" style={{
-                                    left: `${cLeft}%`, width: `${cWidth}%`, minWidth: '4px',
-                                    backgroundColor: SPAN_COLORS_HEX[child.category],
-                                    borderRadius: '3px',
-                                    opacity: 0.85,
-                                  }}>
-                                    <span className="text-[9px] text-white/90 font-medium pl-1.5 truncate pointer-events-none whitespace-nowrap">
-                                      {child.label}()
-                                    </span>
+                              return (
+                                <div key={toolName} className={cn(
+                                  'flex items-center h-8 border-b border-border/10 hover:bg-muted/20 transition-colors',
+                                  anySelected && 'bg-muted/40',
+                                )}>
+                                  {/* Left label area — indented */}
+                                  <div className="w-[200px] shrink-0 flex items-center gap-1.5 pl-10 pr-3 overflow-hidden">
+                                    <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', SPAN_COLORS[category])} />
+                                    <span className="text-[11px] text-muted-foreground font-mono truncate">{toolName}()</span>
+                                    {spans.length > 1 && (
+                                      <span className="text-[9px] text-muted-foreground/50 shrink-0">&times;{spans.length}</span>
+                                    )}
+                                    <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0 ml-auto">{groupDurLabel}</span>
+                                  </div>
+                                  {/* Timeline area */}
+                                  <div className="flex-1 relative h-full cursor-pointer overflow-hidden">
+                                    {/* Gridlines */}
+                                    {ticks.map((tick, i) => (
+                                      <div key={i} className="absolute top-0 h-full w-px bg-border/10" style={{ left: `${tick.pct}%` }} />
+                                    ))}
+                                    {/* Stop/resume markers */}
+                                    {resumeBreaks.map((t, i) => {
+                                      const pct = toPercent(t);
+                                      if (pct < 0 || pct > 100) return null;
+                                      return <div key={`brk-${i}`} className="absolute top-0 h-full w-px bg-orange-400/50 z-20" style={{ left: `${pct}%` }} />;
+                                    })}
+                                    {/* Tool span bars — one per call */}
+                                    {spans.map(child => {
+                                      const childLeft = toPercent(child.start);
+                                      const childWidth = toPercent(child.end) - childLeft;
+                                      if (childLeft + childWidth < -1 || childLeft > 101) return null;
+                                      const cLeft = Math.max(0, childLeft);
+                                      const cWidth = Math.min(100 - cLeft, Math.max(0.3, childLeft + childWidth - cLeft));
+                                      const isThisSelected = child.toolResult && selection?.type === 'tool' && (selection.spanId ? selection.spanId === child.id : selection.toolResult.id === child.toolResult.id);
+                                      const spanMs = child.end - child.start;
+                                      const spanDur = spanMs < 1000 ? `${Math.round(spanMs)}ms` : `${(spanMs / 1000).toFixed(3)}s`;
+                                      return (
+                                        <div
+                                          key={child.id}
+                                          className="absolute top-1.5 bottom-1.5 flex items-center overflow-hidden"
+                                          title={`${child.label}() — ${spanDur}`}
+                                          style={{
+                                            left: `${cLeft}%`, width: `${cWidth}%`, minWidth: '4px',
+                                            backgroundColor: SPAN_COLORS_HEX[child.category],
+                                            borderRadius: '3px',
+                                            opacity: isThisSelected ? 1 : 0.85,
+                                            outline: isThisSelected ? '2px solid white' : 'none',
+                                            outlineOffset: '-1px',
+                                            zIndex: isThisSelected ? 10 : 1,
+                                          }}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (child.toolResult) setSelection({ type: 'tool', toolResult: child.toolResult, spanId: child.id });
+                                          }}
+                                        >
+                                          <span className="text-[9px] text-white/90 font-medium pl-1.5 truncate pointer-events-none whitespace-nowrap">
+                                            {child.label}()
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </div>
-                              </div>
-                            );
-                          })}
+                              );
+                            });
+                          })()}
                         </div>
                       );
                     })}
@@ -2356,7 +2387,12 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
 
       {/* Right: detail panel */}
       {selection && (traceView === 'flamegraph' || traceView === 'table') && (
-        <div className="w-96 shrink-0 border-l flex flex-col overflow-hidden">
+        <div className="shrink-0 border-l flex flex-col overflow-hidden relative" style={{ width: detailPanelWidth }}>
+          {/* Drag handle */}
+          <div
+            className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-20"
+            onMouseDown={handleDetailResizeStart}
+          />
           <div className="p-3 border-b shrink-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium">
