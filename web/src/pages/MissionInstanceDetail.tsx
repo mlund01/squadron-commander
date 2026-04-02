@@ -1164,7 +1164,6 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
   // Built from explicit reasoning_started / reasoning_completed event pairs
   const reasoningRanges = useMemo(() => {
     const ranges = new Map<string, { start: number; end: number }[]>();
-
     for (const row of traceRows) {
       const sessionId = row.sessionId;
       if (!sessionId) continue;
@@ -1186,6 +1185,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
         })
         .map(evt => ({ type: evt.eventType, time: compressTime(evt.time) }))
         .sort((a, b) => a.time - b.time);
+
 
       const rowRanges: { start: number; end: number }[] = [];
       let reasoningStart: number | null = null;
@@ -1804,6 +1804,16 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                           <span className="text-[10px] text-muted-foreground/60 tabular-nums whitespace-nowrap pb-0.5">{tick.label}</span>
                         </div>
                       ))}
+                      {/* Stop/resume markers */}
+                      {resumeBreaks.map((t, i) => {
+                        const pct = toPercent(t);
+                        if (pct < 0 || pct > 100) return null;
+                        return (
+                          <div key={`brk-${i}`} className="absolute top-0 h-full flex flex-col justify-end" style={{ left: `${pct}%` }}>
+                            <span className="text-[9px] text-orange-400 whitespace-nowrap pb-0.5" style={{ transform: 'translateX(-50%)' }}>resume</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -1869,8 +1879,14 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                               {ticks.map((tick, i) => (
                                 <div key={i} className="absolute top-0 h-full w-px bg-border/15" style={{ left: `${tick.pct}%` }} />
                               ))}
-                              {/* Session span bars — split into segments if stop/resume gaps exist */}
-                              {(row.segments ?? [{ start: row.start, end: row.end }]).map((seg, si) => {
+                              {/* Stop/resume markers */}
+                              {resumeBreaks.map((t, i) => {
+                                const pct = toPercent(t);
+                                if (pct < 0 || pct > 100) return null;
+                                return <div key={`brk-${i}`} className="absolute top-0 h-full w-px bg-orange-400/50 z-20" style={{ left: `${pct}%` }} />;
+                              })}
+                              {/* Session span bar — single continuous bar (stop/resume shown via orange markers) */}
+                              {[{ start: row.start, end: row.end }].map((seg, si) => {
                                 const segLeft = toPercent(seg.start);
                                 const segWidth = toPercent(seg.end) - segLeft;
                                 const sLeft = Math.max(0, segLeft);
@@ -1960,6 +1976,12 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                                   {ticks.map((tick, i) => (
                                     <div key={i} className="absolute top-0 h-full w-px bg-border/10" style={{ left: `${tick.pct}%` }} />
                                   ))}
+                                  {/* Stop/resume markers */}
+                                  {resumeBreaks.map((t, i) => {
+                                    const pct = toPercent(t);
+                                    if (pct < 0 || pct > 100) return null;
+                                    return <div key={`brk-${i}`} className="absolute top-0 h-full w-px bg-orange-400/50 z-20" style={{ left: `${pct}%` }} />;
+                                  })}
                                   {/* Tool span bar */}
                                   <div className="absolute top-1.5 bottom-1.5 flex items-center overflow-hidden" style={{
                                     left: `${cLeft}%`, width: `${cWidth}%`, minWidth: '4px',
