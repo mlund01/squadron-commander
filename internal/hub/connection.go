@@ -2,6 +2,7 @@ package hub
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -115,7 +116,12 @@ func (c *Connection) WritePump() {
 }
 
 // Send marshals and queues an envelope for sending.
-func (c *Connection) Send(env *protocol.Envelope) error {
+func (c *Connection) Send(env *protocol.Envelope) (sendErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			sendErr = fmt.Errorf("connection closed")
+		}
+	}()
 	data, err := json.Marshal(env)
 	if err != nil {
 		return err
