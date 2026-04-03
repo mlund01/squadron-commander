@@ -194,9 +194,29 @@ func handleMissionEvents(h *hub.Hub) http.HandlerFunc {
 			return
 		}
 
-		// Subscribe to mission events
+		// Subscribe to mission events from the connection's local fanout
 		ch, cleanup := conn.SubscribeMissionEvents(missionID)
 		defer cleanup()
+
+		// Tell squadron to send events for this mission
+		subEnv, _ := protocol.NewRequest(protocol.TypeSubscribe, &protocol.SubscribePayload{
+			Scope:     "mission",
+			MissionID: missionID,
+		})
+		h.SendMessage(instanceID, subEnv)
+
+		// Unsubscribe when SSE closes
+		defer func() {
+			unsubEnv, _ := protocol.NewRequest(protocol.TypeUnsubscribe, &protocol.UnsubscribePayload{
+				Scope:     "mission",
+				MissionID: missionID,
+			})
+			h.SendMessage(instanceID, unsubEnv)
+		}()
+
+		// Pulse to keep subscription alive
+		pulse := time.NewTicker(15 * time.Second)
+		defer pulse.Stop()
 
 		ctx := r.Context()
 
@@ -204,6 +224,13 @@ func handleMissionEvents(h *hub.Hub) http.HandlerFunc {
 			select {
 			case <-ctx.Done():
 				return
+			case <-pulse.C:
+				// Re-subscribe as a heartbeat
+				pulseEnv, _ := protocol.NewRequest(protocol.TypeSubscribe, &protocol.SubscribePayload{
+					Scope:     "mission",
+					MissionID: missionID,
+				})
+				h.SendMessage(instanceID, pulseEnv)
 			case event, ok := <-ch:
 				if !ok {
 					return

@@ -168,3 +168,48 @@ export function getDownloadFileUrl(instanceId: string, browser: string, relPath:
 export function getDownloadDirUrl(instanceId: string, browser: string, relPath: string): string {
   return `${BASE_URL}/instances/${instanceId}/browsers/${browser}/download-dir?path=${encodeURIComponent(relPath)}`;
 }
+
+export interface CostSummaryResponse {
+  totals: {
+    totalCost: number;
+    inputCost: number;
+    outputCost: number;
+    cacheReadCost: number;
+    cacheWriteCost: number;
+    totalTurns: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+  };
+  byGroup: Array<{
+    groupKey: string;
+    turns: number;
+    totalCost: number;
+    inputCost: number;
+    outputCost: number;
+    cacheReadCost: number;
+    cacheWriteCost: number;
+  }>;
+  byDateAndField?: Array<{
+    date: string;
+    fieldKey: string;
+    totalCost: number;
+  }>;
+  recentMissions: Array<{
+    missionId: string;
+    missionName: string;
+    status: string;
+    turns: number;
+    totalCost: number;
+    startedAt: string;
+  }>;
+}
+
+export async function getCostSummary(instanceId: string, from?: string, to?: string, groupBy?: string, breakdownField?: string): Promise<CostSummaryResponse> {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (groupBy) params.set('groupBy', groupBy);
+  if (breakdownField) params.set('breakdownField', breakdownField);
+  const qs = params.toString();
+  return fetchJSON<CostSummaryResponse>(`/instances/${instanceId}/costs${qs ? '?' + qs : ''}`);
+}

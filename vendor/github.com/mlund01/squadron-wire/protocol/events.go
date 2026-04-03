@@ -193,18 +193,23 @@ type CompactionData struct {
 // Session turn telemetry
 
 type SessionTurnData struct {
-	TaskName                 string `json:"taskName"`
-	Entity                   string `json:"entity"` // "commander" or agent name
-	Model                    string `json:"model"`
-	InputTokens              int    `json:"inputTokens"`
-	OutputTokens             int    `json:"outputTokens"`
-	CacheWriteTokens int `json:"cacheWriteTokens,omitempty"`
-	CacheReadTokens  int `json:"cacheReadTokens,omitempty"`
-	UserMessages             int    `json:"userMessages"`
-	AssistantMessages        int    `json:"assistantMessages"`
-	SystemMessages           int    `json:"systemMessages"`
-	PayloadBytes             int    `json:"payloadBytes"`
-	TurnDurationMs           int64  `json:"turnDurationMs"`
+	TaskName                 string  `json:"taskName"`
+	Entity                   string  `json:"entity"` // "commander" or agent name
+	Model                    string  `json:"model"`
+	InputTokens              int     `json:"inputTokens"`
+	OutputTokens             int     `json:"outputTokens"`
+	CacheWriteTokens         int     `json:"cacheWriteTokens,omitempty"`
+	CacheReadTokens          int     `json:"cacheReadTokens,omitempty"`
+	UserMessages             int     `json:"userMessages"`
+	AssistantMessages        int     `json:"assistantMessages"`
+	SystemMessages           int     `json:"systemMessages"`
+	PayloadBytes             int     `json:"payloadBytes"`
+	TurnDurationMs           int64   `json:"turnDurationMs"`
+	Cost                     float64 `json:"cost,omitempty"`
+	InputCost                float64 `json:"inputCost,omitempty"`
+	OutputCost               float64 `json:"outputCost,omitempty"`
+	CacheReadCost            float64 `json:"cacheReadCost,omitempty"`
+	CacheWriteCost           float64 `json:"cacheWriteCost,omitempty"`
 }
 
 // Agent events

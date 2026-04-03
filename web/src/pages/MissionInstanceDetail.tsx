@@ -1411,7 +1411,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                 )}
                 <TabsTrigger value="flamegraph" className="text-xs px-2 py-1">Trace</TabsTrigger>
                 <TabsTrigger value="table" className="text-xs px-2 py-1">Table</TabsTrigger>
-                <TabsTrigger value="turns" className="text-xs px-2 py-1">Turns</TabsTrigger>
+                <TabsTrigger value="turns" className="text-xs px-2 py-1">Costs</TabsTrigger>
                 <TabsTrigger value="events" className="text-xs px-2 py-1">Events</TabsTrigger>
               </TabsList>
             </div>
@@ -2174,6 +2174,8 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                     cacheWriteTokens?: number; cacheReadTokens?: number;
                     userMessages: number; assistantMessages: number; systemMessages: number;
                     payloadBytes: number; turnDurationMs: number; createdAt: string;
+                    cost?: number; inputCost?: number; outputCost?: number;
+                    cacheReadCost?: number; cacheWriteCost?: number;
                   }>;
 
                 const entities = ['all', ...Array.from(new Set(events.map(e => e.entity)))];
@@ -2186,10 +2188,12 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                   cacheRead: acc.cacheRead + (e.cacheReadTokens || 0),
                   payloadBytes: acc.payloadBytes + e.payloadBytes,
                   duration: acc.duration + e.turnDurationMs,
-                }), { inputTokens: 0, outputTokens: 0, cacheWrite: 0, cacheRead: 0, payloadBytes: 0, duration: 0 });
+                  cost: acc.cost + (e.cost || 0),
+                }), { inputTokens: 0, outputTokens: 0, cacheWrite: 0, cacheRead: 0, payloadBytes: 0, duration: 0, cost: 0 });
 
                 const fmtBytes = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
                 const fmtNum = (n: number) => n.toLocaleString();
+                const fmtCost = (c: number) => c > 0 ? `$${c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2)}` : '—';
 
                 return (
                   <div className="absolute inset-0 overflow-auto p-3 space-y-3">
@@ -2249,6 +2253,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                             </th>
                             <th className="px-2 py-1 font-medium text-right">Payload</th>
                             <th className="px-2 py-1 font-medium text-right">Duration</th>
+                            <th className="px-2 py-1 font-medium text-right">Est. Cost</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2272,6 +2277,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                                 <td className="px-2 py-1 text-right tabular-nums">{e.userMessages}/{e.assistantMessages}/{e.systemMessages}</td>
                                 <td className="px-2 py-1 text-right tabular-nums">{fmtBytes(e.payloadBytes)}</td>
                                 <td className="px-2 py-1 text-right tabular-nums">{(e.turnDurationMs / 1000).toFixed(3)}s</td>
+                                <td className="px-2 py-1 text-right tabular-nums font-medium">{fmtCost(e.cost || 0)}</td>
                               </tr>
                             );
                           })}
@@ -2289,6 +2295,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                             <td className="px-2 py-1.5 text-right tabular-nums">—</td>
                             <td className="px-2 py-1.5 text-right tabular-nums">{fmtBytes(totals.payloadBytes)}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums">{(totals.duration / 1000).toFixed(3)}s</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums font-medium">{fmtCost(totals.cost)}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -2738,6 +2745,123 @@ function EventLogRow({ event }: { event: NormalizedEvent }) {
   );
 }
 
+function MissionCostsTab({ instanceId, missionId, isRunning }: { instanceId: string; missionId: string; isRunning: boolean }) {
+  const { data } = useQuery({
+    queryKey: ['missionEvents', instanceId, missionId],
+    queryFn: () => getMissionEvents(instanceId, missionId),
+    refetchInterval: isRunning ? 1000 : false,
+  });
+
+  const allTurns = useMemo(() => {
+    if (!data?.events) return [];
+    return data.events
+      .filter(e => e.eventType === 'session_turn')
+      .map(e => {
+        try { return JSON.parse(e.dataJson || '{}'); } catch { return null; }
+      })
+      .filter(Boolean) as Array<{
+        taskName: string; entity: string; model?: string;
+        inputTokens: number; outputTokens: number;
+        cacheWriteTokens?: number; cacheReadTokens?: number;
+        turnDurationMs: number; cost?: number;
+      }>;
+  }, [data]);
+
+  const fmtCost = (c: number) => c > 0 ? `$${c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2)}` : '—';
+  const fmtNum = (n: number) => n.toLocaleString();
+
+  const totalCost = allTurns.reduce((sum, e) => sum + (e.cost || 0), 0);
+  const totalInput = allTurns.reduce((sum, e) => sum + e.inputTokens, 0);
+  const totalOutput = allTurns.reduce((sum, e) => sum + e.outputTokens, 0);
+  const totalCacheWrite = allTurns.reduce((sum, e) => sum + (e.cacheWriteTokens || 0), 0);
+  const totalCacheRead = allTurns.reduce((sum, e) => sum + (e.cacheReadTokens || 0), 0);
+
+  const taskMap = useMemo(() => {
+    const map = new Map<string, { turns: number; cost: number; input: number; output: number; cacheWrite: number; cacheRead: number; duration: number }>();
+    for (const t of allTurns) {
+      // Strip iteration suffix (e.g. "task[0]" → "task") so iterations aggregate
+      const rawName = t.taskName || 'unknown';
+      const name = rawName.replace(/\[\d+\]$/, '');
+      const existing = map.get(name) || { turns: 0, cost: 0, input: 0, output: 0, cacheWrite: 0, cacheRead: 0, duration: 0 };
+      existing.turns++;
+      existing.cost += t.cost || 0;
+      existing.input += t.inputTokens;
+      existing.output += t.outputTokens;
+      existing.cacheWrite += t.cacheWriteTokens || 0;
+      existing.cacheRead += t.cacheReadTokens || 0;
+      existing.duration += t.turnDurationMs;
+      map.set(name, existing);
+    }
+    return map;
+  }, [allTurns]);
+
+  return (
+    <div className="overflow-auto p-4 h-full space-y-4">
+      <div className="grid grid-cols-4 gap-3">
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Est. Cost</p>
+          <p className="text-lg font-semibold tabular-nums">{fmtCost(totalCost)}</p>
+        </div>
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Turns</p>
+          <p className="text-lg font-semibold tabular-nums">{allTurns.length}</p>
+        </div>
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Input Tokens</p>
+          <p className="text-lg font-semibold tabular-nums">{fmtNum(totalInput + totalCacheWrite + totalCacheRead)}</p>
+        </div>
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Output Tokens</p>
+          <p className="text-lg font-semibold tabular-nums">{fmtNum(totalOutput)}</p>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Cost by Task</h3>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b text-left text-muted-foreground">
+              <th className="px-2 py-1 font-medium">Task</th>
+              <th className="px-2 py-1 font-medium text-right">Turns</th>
+              <th className="px-2 py-1 font-medium text-right">Input</th>
+              <th className="px-2 py-1 font-medium text-right">Output</th>
+              <th className="px-2 py-1 font-medium text-right">Cache Write</th>
+              <th className="px-2 py-1 font-medium text-right">Cache Read</th>
+              <th className="px-2 py-1 font-medium text-right">Duration</th>
+              <th className="px-2 py-1 font-medium text-right">Est. Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...taskMap.entries()].map(([name, d]) => (
+              <tr key={name} className="border-b border-border/30 hover:bg-muted/30">
+                <td className="px-2 py-1 font-mono">{name}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{d.turns}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtNum(d.input + d.cacheWrite + d.cacheRead)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtNum(d.output)}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{d.cacheWrite > 0 ? fmtNum(d.cacheWrite) : '—'}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{d.cacheRead > 0 ? fmtNum(d.cacheRead) : '—'}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{(d.duration / 1000).toFixed(3)}s</td>
+                <td className="px-2 py-1 text-right tabular-nums font-medium">{fmtCost(d.cost)}</td>
+              </tr>
+            ))}
+            <tr className="border-t-2 font-medium">
+              <td className="px-2 py-1.5">Total</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{allTurns.length}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(totalInput + totalCacheWrite + totalCacheRead)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(totalOutput)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{totalCacheWrite > 0 ? fmtNum(totalCacheWrite) : '—'}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{totalCacheRead > 0 ? fmtNum(totalCacheRead) : '—'}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">—</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{fmtCost(totalCost)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  );
+}
+
 function EventsTab({ instanceId, missionId, isRunning }: { instanceId: string; missionId: string; isRunning: boolean }) {
   const queryClient = useQueryClient();
   const [liveEvents, setLiveEvents] = useState<NormalizedEvent[]>([]);
@@ -3140,6 +3264,7 @@ export function MissionInstanceDetail() {
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0 ml-0.5">{taskRecords.length}</Badge>
               </TabsTrigger>
               <TabsTrigger value="events">Events</TabsTrigger>
+              <TabsTrigger value="costs">Costs</TabsTrigger>
             </TabsList>
             <div className="ml-auto">
               <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={togglePanel}>
@@ -3205,6 +3330,9 @@ export function MissionInstanceDetail() {
             </TabsContent>
             <TabsContent value="events" className="h-full m-0">
               <EventsTab instanceId={id!} missionId={mid!} isRunning={isRunning} />
+            </TabsContent>
+            <TabsContent value="costs" className="h-full m-0">
+              <MissionCostsTab instanceId={id!} missionId={mid!} isRunning={isRunning} />
             </TabsContent>
           </div>
         </Tabs>

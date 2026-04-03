@@ -390,6 +390,12 @@ func (c *Connection) handleRegister(env *protocol.Envelope) {
 	c.Send(ack)
 
 	log.Printf("Instance registered: %s (id=%s)", payload.InstanceName, instanceID)
+
+	// Subscribe to global events (mission lifecycle, cost tracking)
+	subEnv, _ := protocol.NewRequest(protocol.TypeSubscribe, &protocol.SubscribePayload{
+		Scope: "global",
+	})
+	c.Send(subEnv)
 }
 
 func (c *Connection) handleHeartbeat(env *protocol.Envelope) {

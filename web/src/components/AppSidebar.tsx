@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Rocket, Bot, Puzzle, RefreshCw, History, FileCode, FolderOpen, KeyRound, AlertTriangle } from 'lucide-react';
+import { Rocket, Bot, Puzzle, RefreshCw, History, FileCode, FolderOpen, KeyRound, AlertTriangle, DollarSign } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -32,6 +32,7 @@ const staticNavItems = [
   { label: 'History', path: 'history', icon: History },
   { label: 'Agents', path: 'agents', icon: Bot },
   { label: 'Tools', path: 'tools', icon: Puzzle },
+  { label: 'Costs', path: 'costs', icon: DollarSign },
   { label: 'Variables', path: 'variables', icon: KeyRound },
   { label: 'Config', path: 'config', icon: FileCode },
 ];
