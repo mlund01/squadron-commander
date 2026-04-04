@@ -89,6 +89,15 @@ func (h *Hub) SendRequest(instanceID string, env *protocol.Envelope, timeout tim
 	return conn.SendRequest(env, timeout)
 }
 
+// SendMessage sends a fire-and-forget message to an instance (no response expected).
+func (h *Hub) SendMessage(instanceID string, env *protocol.Envelope) error {
+	conn := h.GetConnection(instanceID)
+	if conn == nil {
+		return ErrInstanceDisconnected
+	}
+	return conn.Send(env)
+}
+
 // GetRegistry returns the instance registry.
 func (h *Hub) GetRegistry() *Registry {
 	return h.registry

@@ -42,6 +42,9 @@ func RegisterRoutes(mux *http.ServeMux, h *hub.Hub, ka *keepalive.KeepAlive) {
 	mux.HandleFunc("GET /api/instances/{id}/missions/{mid}/datasets", handleGetDatasets(h))
 	mux.HandleFunc("GET /api/instances/{id}/datasets/{did}/items", handleGetDatasetItems(h))
 
+	// Cost tracking
+	mux.HandleFunc("GET /api/instances/{id}/costs", handleGetCostSummary(h))
+
 	// Shared folder endpoints
 	mux.HandleFunc("GET /api/instances/{id}/browsers", handleListSharedFolders(h))
 	mux.HandleFunc("GET /api/instances/{id}/browsers/{browser}/browse", handleBrowseDirectory(h))

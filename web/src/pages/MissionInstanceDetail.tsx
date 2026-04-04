@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { StatusBadge, formatTime, formatDuration } from '@/lib/mission-utils';
 import { useResizablePanel } from '@/hooks/use-resizable-panel';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { ZoomControls } from '@/components/zoom-controls';
 import type { TaskInfo, MissionEvent, MissionTaskRecord, ToolResultDTO, TaskOutputInfo, SubtaskInfo, DatasetItemInfo } from '@/api/types';
 import { RouterEdge } from '@/components/RouterEdge';
@@ -726,6 +727,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
   const [expandedTraceRows, setExpandedTraceRows] = useState<Set<string>>(new Set());
   const [turnsEntityFilter, setTurnsEntityFilter] = useState('all');
   const [sessionModal, setSessionModal] = useState<{ type: 'messages' | 'system'; sessionId: string } | null>(null);
+  const { width: detailPanelWidth, handleResizeStart: handleDetailResizeStart } = useHorizontalResize({ initialWidth: 384, minWidth: 240, maxWidth: 700 });
 
   const selectedSessionId = selection?.type === 'session' ? selection.sessionId : null;
 
@@ -1409,7 +1411,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                 )}
                 <TabsTrigger value="flamegraph" className="text-xs px-2 py-1">Trace</TabsTrigger>
                 <TabsTrigger value="table" className="text-xs px-2 py-1">Table</TabsTrigger>
-                <TabsTrigger value="turns" className="text-xs px-2 py-1">Turns</TabsTrigger>
+                <TabsTrigger value="turns" className="text-xs px-2 py-1">Costs</TabsTrigger>
                 <TabsTrigger value="events" className="text-xs px-2 py-1">Events</TabsTrigger>
               </TabsList>
             </div>
@@ -1943,60 +1945,89 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                             </div>
                           </div>
 
-                          {/* Expanded child tool call rows */}
-                          {isExpanded && row.children.map(child => {
-                            const childMs = child.end - child.start;
-                            const childDurLabel = childMs < 1000 ? `${Math.round(childMs)}ms` : `${(childMs / 1000).toFixed(3)}s`;
-                            const childLeft = toPercent(child.start);
-                            const childWidth = toPercent(child.end) - childLeft;
-                            if (childLeft + childWidth < -1 || childLeft > 101) return null;
-                            const cLeft = Math.max(0, childLeft);
-                            const cWidth = Math.min(100 - cLeft, Math.max(0.3, childLeft + childWidth - cLeft));
-                            const isChildSelected = child.toolResult && selection?.type === 'tool' && (selection.spanId ? selection.spanId === child.id : selection.toolResult.id === child.toolResult.id);
+                          {/* Expanded child tool call rows — grouped by tool name */}
+                          {isExpanded && (() => {
+                            // Group children by label (tool name)
+                            const grouped = new Map<string, typeof row.children>();
+                            for (const child of row.children) {
+                              const group = grouped.get(child.label);
+                              if (group) group.push(child);
+                              else grouped.set(child.label, [child]);
+                            }
+                            return [...grouped.entries()].map(([toolName, spans]) => {
+                              const totalMs = spans.reduce((sum, s) => sum + (s.end - s.start), 0);
+                              const groupDurLabel = totalMs < 1000 ? `${Math.round(totalMs)}ms` : `${(totalMs / 1000).toFixed(3)}s`;
+                              const anySelected = spans.some(child =>
+                                child.toolResult && selection?.type === 'tool' && (selection.spanId ? selection.spanId === child.id : selection.toolResult.id === child.toolResult.id)
+                              );
+                              const category = spans[0].category;
 
-                            return (
-                              <div key={child.id} className={cn(
-                                'flex items-center h-8 border-b border-border/10 hover:bg-muted/20 transition-colors',
-                                isChildSelected && 'bg-muted/40',
-                              )}>
-                                {/* Left label area — indented */}
-                                <div className="w-[200px] shrink-0 flex items-center gap-1.5 pl-10 pr-3 overflow-hidden">
-                                  <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', SPAN_COLORS[child.category])} />
-                                  <span className="text-[11px] text-muted-foreground font-mono truncate">{child.label}()</span>
-                                  <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0 ml-auto">{childDurLabel}</span>
-                                </div>
-                                {/* Timeline area */}
-                                <div
-                                  className="flex-1 relative h-full cursor-pointer overflow-hidden"
-                                  onClick={() => {
-                                    if (child.toolResult) setSelection({ type: 'tool', toolResult: child.toolResult, spanId: child.id });
-                                  }}
-                                >
-                                  {/* Gridlines */}
-                                  {ticks.map((tick, i) => (
-                                    <div key={i} className="absolute top-0 h-full w-px bg-border/10" style={{ left: `${tick.pct}%` }} />
-                                  ))}
-                                  {/* Stop/resume markers */}
-                                  {resumeBreaks.map((t, i) => {
-                                    const pct = toPercent(t);
-                                    if (pct < 0 || pct > 100) return null;
-                                    return <div key={`brk-${i}`} className="absolute top-0 h-full w-px bg-orange-400/50 z-20" style={{ left: `${pct}%` }} />;
-                                  })}
-                                  {/* Tool span bar */}
-                                  <div className="absolute top-1.5 bottom-1.5 flex items-center overflow-hidden" style={{
-                                    left: `${cLeft}%`, width: `${cWidth}%`, minWidth: '4px',
-                                    backgroundColor: SPAN_COLORS_HEX[child.category],
-                                    borderRadius: '3px',
-                                    opacity: 0.85,
-                                  }}>
-                                    <span className="text-[9px] text-white/90 font-medium pl-1.5 truncate pointer-events-none whitespace-nowrap">
-                                      {child.label}()
-                                    </span>
+                              return (
+                                <div key={toolName} className={cn(
+                                  'flex items-center h-8 border-b border-border/10 hover:bg-muted/20 transition-colors',
+                                  anySelected && 'bg-muted/40',
+                                )}>
+                                  {/* Left label area — indented */}
+                                  <div className="w-[200px] shrink-0 flex items-center gap-1.5 pl-10 pr-3 overflow-hidden">
+                                    <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', SPAN_COLORS[category])} />
+                                    <span className="text-[11px] text-muted-foreground font-mono truncate">{toolName}()</span>
+                                    {spans.length > 1 && (
+                                      <span className="text-[9px] text-muted-foreground/50 shrink-0">&times;{spans.length}</span>
+                                    )}
+                                    <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0 ml-auto">{groupDurLabel}</span>
+                                  </div>
+                                  {/* Timeline area */}
+                                  <div className="flex-1 relative h-full cursor-pointer overflow-hidden">
+                                    {/* Gridlines */}
+                                    {ticks.map((tick, i) => (
+                                      <div key={i} className="absolute top-0 h-full w-px bg-border/10" style={{ left: `${tick.pct}%` }} />
+                                    ))}
+                                    {/* Stop/resume markers */}
+                                    {resumeBreaks.map((t, i) => {
+                                      const pct = toPercent(t);
+                                      if (pct < 0 || pct > 100) return null;
+                                      return <div key={`brk-${i}`} className="absolute top-0 h-full w-px bg-orange-400/50 z-20" style={{ left: `${pct}%` }} />;
+                                    })}
+                                    {/* Tool span bars — one per call */}
+                                    {spans.map(child => {
+                                      const childLeft = toPercent(child.start);
+                                      const childWidth = toPercent(child.end) - childLeft;
+                                      if (childLeft + childWidth < -1 || childLeft > 101) return null;
+                                      const cLeft = Math.max(0, childLeft);
+                                      const cWidth = Math.min(100 - cLeft, Math.max(0.3, childLeft + childWidth - cLeft));
+                                      const isThisSelected = child.toolResult && selection?.type === 'tool' && (selection.spanId ? selection.spanId === child.id : selection.toolResult.id === child.toolResult.id);
+                                      const spanMs = child.end - child.start;
+                                      const spanDur = spanMs < 1000 ? `${Math.round(spanMs)}ms` : `${(spanMs / 1000).toFixed(3)}s`;
+                                      return (
+                                        <div
+                                          key={child.id}
+                                          className="absolute top-1.5 bottom-1.5 flex items-center overflow-hidden"
+                                          title={`${child.label}() — ${spanDur}`}
+                                          style={{
+                                            left: `${cLeft}%`, width: `${cWidth}%`, minWidth: '4px',
+                                            backgroundColor: SPAN_COLORS_HEX[child.category],
+                                            borderRadius: '3px',
+                                            opacity: isThisSelected ? 1 : 0.85,
+                                            outline: isThisSelected ? '2px solid white' : 'none',
+                                            outlineOffset: '-1px',
+                                            zIndex: isThisSelected ? 10 : 1,
+                                          }}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (child.toolResult) setSelection({ type: 'tool', toolResult: child.toolResult, spanId: child.id });
+                                          }}
+                                        >
+                                          <span className="text-[9px] text-white/90 font-medium pl-1.5 truncate pointer-events-none whitespace-nowrap">
+                                            {child.label}()
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </div>
-                              </div>
-                            );
-                          })}
+                              );
+                            });
+                          })()}
                         </div>
                       );
                     })}
@@ -2143,6 +2174,8 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                     cacheWriteTokens?: number; cacheReadTokens?: number;
                     userMessages: number; assistantMessages: number; systemMessages: number;
                     payloadBytes: number; turnDurationMs: number; createdAt: string;
+                    cost?: number; inputCost?: number; outputCost?: number;
+                    cacheReadCost?: number; cacheWriteCost?: number;
                   }>;
 
                 const entities = ['all', ...Array.from(new Set(events.map(e => e.entity)))];
@@ -2155,10 +2188,12 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                   cacheRead: acc.cacheRead + (e.cacheReadTokens || 0),
                   payloadBytes: acc.payloadBytes + e.payloadBytes,
                   duration: acc.duration + e.turnDurationMs,
-                }), { inputTokens: 0, outputTokens: 0, cacheWrite: 0, cacheRead: 0, payloadBytes: 0, duration: 0 });
+                  cost: acc.cost + (e.cost || 0),
+                }), { inputTokens: 0, outputTokens: 0, cacheWrite: 0, cacheRead: 0, payloadBytes: 0, duration: 0, cost: 0 });
 
                 const fmtBytes = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
                 const fmtNum = (n: number) => n.toLocaleString();
+                const fmtCost = (c: number) => c > 0 ? `$${c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2)}` : '—';
 
                 return (
                   <div className="absolute inset-0 overflow-auto p-3 space-y-3">
@@ -2218,6 +2253,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                             </th>
                             <th className="px-2 py-1 font-medium text-right">Payload</th>
                             <th className="px-2 py-1 font-medium text-right">Duration</th>
+                            <th className="px-2 py-1 font-medium text-right">Est. Cost</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2241,6 +2277,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                                 <td className="px-2 py-1 text-right tabular-nums">{e.userMessages}/{e.assistantMessages}/{e.systemMessages}</td>
                                 <td className="px-2 py-1 text-right tabular-nums">{fmtBytes(e.payloadBytes)}</td>
                                 <td className="px-2 py-1 text-right tabular-nums">{(e.turnDurationMs / 1000).toFixed(3)}s</td>
+                                <td className="px-2 py-1 text-right tabular-nums font-medium">{fmtCost(e.cost || 0)}</td>
                               </tr>
                             );
                           })}
@@ -2258,6 +2295,7 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
                             <td className="px-2 py-1.5 text-right tabular-nums">—</td>
                             <td className="px-2 py-1.5 text-right tabular-nums">{fmtBytes(totals.payloadBytes)}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums">{(totals.duration / 1000).toFixed(3)}s</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums font-medium">{fmtCost(totals.cost)}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -2356,7 +2394,12 @@ function TasksTab({ instanceId, tasks, allTasks, missionId, isRunning, chosenRou
 
       {/* Right: detail panel */}
       {selection && (traceView === 'flamegraph' || traceView === 'table') && (
-        <div className="w-96 shrink-0 border-l flex flex-col overflow-hidden">
+        <div className="shrink-0 border-l flex flex-col overflow-hidden relative" style={{ width: detailPanelWidth }}>
+          {/* Drag handle */}
+          <div
+            className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-20"
+            onMouseDown={handleDetailResizeStart}
+          />
           <div className="p-3 border-b shrink-0">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium">
@@ -2698,6 +2741,123 @@ function EventLogRow({ event }: { event: NormalizedEvent }) {
           {content}
         </pre>
       )}
+    </div>
+  );
+}
+
+function MissionCostsTab({ instanceId, missionId, isRunning }: { instanceId: string; missionId: string; isRunning: boolean }) {
+  const { data } = useQuery({
+    queryKey: ['missionEvents', instanceId, missionId],
+    queryFn: () => getMissionEvents(instanceId, missionId),
+    refetchInterval: isRunning ? 1000 : false,
+  });
+
+  const allTurns = useMemo(() => {
+    if (!data?.events) return [];
+    return data.events
+      .filter(e => e.eventType === 'session_turn')
+      .map(e => {
+        try { return JSON.parse(e.dataJson || '{}'); } catch { return null; }
+      })
+      .filter(Boolean) as Array<{
+        taskName: string; entity: string; model?: string;
+        inputTokens: number; outputTokens: number;
+        cacheWriteTokens?: number; cacheReadTokens?: number;
+        turnDurationMs: number; cost?: number;
+      }>;
+  }, [data]);
+
+  const fmtCost = (c: number) => c > 0 ? `$${c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2)}` : '—';
+  const fmtNum = (n: number) => n.toLocaleString();
+
+  const totalCost = allTurns.reduce((sum, e) => sum + (e.cost || 0), 0);
+  const totalInput = allTurns.reduce((sum, e) => sum + e.inputTokens, 0);
+  const totalOutput = allTurns.reduce((sum, e) => sum + e.outputTokens, 0);
+  const totalCacheWrite = allTurns.reduce((sum, e) => sum + (e.cacheWriteTokens || 0), 0);
+  const totalCacheRead = allTurns.reduce((sum, e) => sum + (e.cacheReadTokens || 0), 0);
+
+  const taskMap = useMemo(() => {
+    const map = new Map<string, { turns: number; cost: number; input: number; output: number; cacheWrite: number; cacheRead: number; duration: number }>();
+    for (const t of allTurns) {
+      // Strip iteration suffix (e.g. "task[0]" → "task") so iterations aggregate
+      const rawName = t.taskName || 'unknown';
+      const name = rawName.replace(/\[\d+\]$/, '');
+      const existing = map.get(name) || { turns: 0, cost: 0, input: 0, output: 0, cacheWrite: 0, cacheRead: 0, duration: 0 };
+      existing.turns++;
+      existing.cost += t.cost || 0;
+      existing.input += t.inputTokens;
+      existing.output += t.outputTokens;
+      existing.cacheWrite += t.cacheWriteTokens || 0;
+      existing.cacheRead += t.cacheReadTokens || 0;
+      existing.duration += t.turnDurationMs;
+      map.set(name, existing);
+    }
+    return map;
+  }, [allTurns]);
+
+  return (
+    <div className="overflow-auto p-4 h-full space-y-4">
+      <div className="grid grid-cols-4 gap-3">
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Est. Cost</p>
+          <p className="text-lg font-semibold tabular-nums">{fmtCost(totalCost)}</p>
+        </div>
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Turns</p>
+          <p className="text-lg font-semibold tabular-nums">{allTurns.length}</p>
+        </div>
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Input Tokens</p>
+          <p className="text-lg font-semibold tabular-nums">{fmtNum(totalInput + totalCacheWrite + totalCacheRead)}</p>
+        </div>
+        <div className="border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Output Tokens</p>
+          <p className="text-lg font-semibold tabular-nums">{fmtNum(totalOutput)}</p>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Cost by Task</h3>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b text-left text-muted-foreground">
+              <th className="px-2 py-1 font-medium">Task</th>
+              <th className="px-2 py-1 font-medium text-right">Turns</th>
+              <th className="px-2 py-1 font-medium text-right">Input</th>
+              <th className="px-2 py-1 font-medium text-right">Output</th>
+              <th className="px-2 py-1 font-medium text-right">Cache Write</th>
+              <th className="px-2 py-1 font-medium text-right">Cache Read</th>
+              <th className="px-2 py-1 font-medium text-right">Duration</th>
+              <th className="px-2 py-1 font-medium text-right">Est. Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...taskMap.entries()].map(([name, d]) => (
+              <tr key={name} className="border-b border-border/30 hover:bg-muted/30">
+                <td className="px-2 py-1 font-mono">{name}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{d.turns}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtNum(d.input + d.cacheWrite + d.cacheRead)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtNum(d.output)}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{d.cacheWrite > 0 ? fmtNum(d.cacheWrite) : '—'}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{d.cacheRead > 0 ? fmtNum(d.cacheRead) : '—'}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{(d.duration / 1000).toFixed(3)}s</td>
+                <td className="px-2 py-1 text-right tabular-nums font-medium">{fmtCost(d.cost)}</td>
+              </tr>
+            ))}
+            <tr className="border-t-2 font-medium">
+              <td className="px-2 py-1.5">Total</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{allTurns.length}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(totalInput + totalCacheWrite + totalCacheRead)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(totalOutput)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{totalCacheWrite > 0 ? fmtNum(totalCacheWrite) : '—'}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{totalCacheRead > 0 ? fmtNum(totalCacheRead) : '—'}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">—</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{fmtCost(totalCost)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
     </div>
   );
 }
@@ -3104,6 +3264,7 @@ export function MissionInstanceDetail() {
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0 ml-0.5">{taskRecords.length}</Badge>
               </TabsTrigger>
               <TabsTrigger value="events">Events</TabsTrigger>
+              <TabsTrigger value="costs">Costs</TabsTrigger>
             </TabsList>
             <div className="ml-auto">
               <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={togglePanel}>
@@ -3169,6 +3330,9 @@ export function MissionInstanceDetail() {
             </TabsContent>
             <TabsContent value="events" className="h-full m-0">
               <EventsTab instanceId={id!} missionId={mid!} isRunning={isRunning} />
+            </TabsContent>
+            <TabsContent value="costs" className="h-full m-0">
+              <MissionCostsTab instanceId={id!} missionId={mid!} isRunning={isRunning} />
             </TabsContent>
           </div>
         </Tabs>

@@ -2,6 +2,7 @@ package hub
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -115,7 +116,12 @@ func (c *Connection) WritePump() {
 }
 
 // Send marshals and queues an envelope for sending.
-func (c *Connection) Send(env *protocol.Envelope) error {
+func (c *Connection) Send(env *protocol.Envelope) (sendErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			sendErr = fmt.Errorf("connection closed")
+		}
+	}()
 	data, err := json.Marshal(env)
 	if err != nil {
 		return err
@@ -390,6 +396,12 @@ func (c *Connection) handleRegister(env *protocol.Envelope) {
 	c.Send(ack)
 
 	log.Printf("Instance registered: %s (id=%s)", payload.InstanceName, instanceID)
+
+	// Subscribe to global events (mission lifecycle, cost tracking)
+	subEnv, _ := protocol.NewRequest(protocol.TypeSubscribe, &protocol.SubscribePayload{
+		Scope: "global",
+	})
+	c.Send(subEnv)
 }
 
 func (c *Connection) handleHeartbeat(env *protocol.Envelope) {

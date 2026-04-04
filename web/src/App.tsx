@@ -11,6 +11,7 @@ import { MissionHistory } from './pages/MissionHistory'
 import { MissionInstanceDetail } from './pages/MissionInstanceDetail'
 import { AgentDetail } from './pages/AgentDetail'
 import { ConfigPage } from './pages/ConfigPage'
+import { CostsPage } from './pages/CostsPage'
 import { FileBrowserPage } from './pages/FileBrowserPage'
 import { FileViewerPage } from './pages/FileViewerPage'
 import { VariablesPage } from './pages/VariablesPage'
@@ -30,6 +31,7 @@ function App() {
         <Route path="history" element={<MissionHistory />} />
         <Route path="missions/:name" element={<MissionDetail />} />
         <Route path="runs/:mid" element={<MissionInstanceDetail />} />
+        <Route path="costs" element={<CostsPage />} />
         <Route path="config" element={<ConfigPage />} />
         <Route path="variables" element={<VariablesPage />} />
         <Route path="files" element={<FileBrowserPage />} />

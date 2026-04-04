@@ -201,6 +201,9 @@ func TestHeartbeat(t *testing.T) {
 	ws := dialWS(t, srv)
 	registerInstance(t, ws, "heartbeat-test")
 
+	// Drain the auto-subscribe message sent after registration
+	readEnvelope(t, ws)
+
 	// Send heartbeat
 	req, err := protocol.NewRequest(protocol.TypeHeartbeat, &protocol.HeartbeatPayload{})
 	if err != nil {
@@ -218,6 +221,9 @@ func TestSendRequest(t *testing.T) {
 	h, srv := setupTestServer(t)
 	ws := dialWS(t, srv)
 	instanceID := registerInstance(t, ws, "request-test")
+
+	// Drain auto-subscribe
+	readEnvelope(t, ws)
 
 	// Commander sends a get_config request to the instance via hub
 	go func() {
@@ -264,6 +270,9 @@ func TestMissionEventFanOut(t *testing.T) {
 	ws := dialWS(t, srv)
 	instanceID := registerInstance(t, ws, "event-test")
 
+	// Drain auto-subscribe
+	readEnvelope(t, ws)
+
 	conn := h.GetConnection(instanceID)
 	if conn == nil {
 		t.Fatal("expected connection")
@@ -295,5 +304,73 @@ func TestMissionEventFanOut(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for mission event")
+	}
+}
+
+func TestGlobalSubscribeOnRegister(t *testing.T) {
+	_, srv := setupTestServer(t)
+	ws := dialWS(t, srv)
+
+	// Register — should trigger a global subscribe message back to the instance
+	registerInstance(t, ws, "sub-test")
+
+	// Read the subscribe message that the hub sends after registration
+	env := readEnvelope(t, ws)
+	if env.Type != protocol.TypeSubscribe {
+		t.Fatalf("expected subscribe message after register, got %s", env.Type)
+	}
+
+	var payload protocol.SubscribePayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		t.Fatalf("decode subscribe: %v", err)
+	}
+	if payload.Scope != "global" {
+		t.Errorf("expected global scope, got %s", payload.Scope)
+	}
+}
+
+func TestSendMessageFireAndForget(t *testing.T) {
+	h, srv := setupTestServer(t)
+	ws := dialWS(t, srv)
+	instanceID := registerInstance(t, ws, "msg-test")
+
+	// Drain the auto-subscribe message
+	readEnvelope(t, ws)
+
+	// Send a fire-and-forget message
+	env, _ := protocol.NewRequest(protocol.TypeSubscribe, &protocol.SubscribePayload{
+		Scope:     "mission",
+		MissionID: "test-mission-1",
+	})
+	err := h.SendMessage(instanceID, env)
+	if err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	// Instance should receive it
+	received := readEnvelope(t, ws)
+	if received.Type != protocol.TypeSubscribe {
+		t.Fatalf("expected subscribe, got %s", received.Type)
+	}
+
+	var payload protocol.SubscribePayload
+	if err := protocol.DecodePayload(received, &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if payload.MissionID != "test-mission-1" {
+		t.Errorf("expected mission test-mission-1, got %s", payload.MissionID)
+	}
+}
+
+func TestSendMessageDisconnected(t *testing.T) {
+	h, srv := setupTestServer(t)
+	_ = srv // keep server alive
+
+	env, _ := protocol.NewRequest(protocol.TypeSubscribe, &protocol.SubscribePayload{
+		Scope: "global",
+	})
+	err := h.SendMessage("nonexistent", env)
+	if err == nil {
+		t.Fatal("expected error for disconnected instance")
 	}
 }

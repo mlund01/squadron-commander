@@ -680,3 +680,75 @@ type ErrorPayload struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// =============================================================================
+// Cost tracking
+// =============================================================================
+
+// =============================================================================
+// Event subscriptions
+// =============================================================================
+
+type SubscribePayload struct {
+	Scope     string `json:"scope"`               // "global" or "mission"
+	MissionID string `json:"missionId,omitempty"`  // required when scope = "mission"
+}
+
+type UnsubscribePayload struct {
+	Scope     string `json:"scope"`               // "global" or "mission"
+	MissionID string `json:"missionId,omitempty"`  // required when scope = "mission"
+}
+
+// =============================================================================
+// Cost tracking
+// =============================================================================
+
+type GetCostSummaryPayload struct {
+	From           string `json:"from"`           // ISO timestamp
+	To             string `json:"to"`             // ISO timestamp
+	GroupBy        string `json:"groupBy"`        // "model", "mission_name", "date"
+	BreakdownField string `json:"breakdownField"` // optional: "model" or "mission_name" — returns date × field pivot
+}
+
+type CostSummaryRow struct {
+	GroupKey       string  `json:"groupKey"`
+	Turns          int     `json:"turns"`
+	TotalCost      float64 `json:"totalCost"`
+	InputCost      float64 `json:"inputCost"`
+	OutputCost     float64 `json:"outputCost"`
+	CacheReadCost  float64 `json:"cacheReadCost"`
+	CacheWriteCost float64 `json:"cacheWriteCost"`
+}
+
+type MissionCostRow struct {
+	MissionID   string `json:"missionId"`
+	MissionName string `json:"missionName"`
+	Status      string `json:"status"`
+	Turns       int    `json:"turns"`
+	TotalCost   float64 `json:"totalCost"`
+	StartedAt   string `json:"startedAt"`
+}
+
+type CostTotals struct {
+	TotalCost         float64 `json:"totalCost"`
+	InputCost         float64 `json:"inputCost"`
+	OutputCost        float64 `json:"outputCost"`
+	CacheReadCost     float64 `json:"cacheReadCost"`
+	CacheWriteCost    float64 `json:"cacheWriteCost"`
+	TotalTurns        int     `json:"totalTurns"`
+	TotalInputTokens  int     `json:"totalInputTokens"`
+	TotalOutputTokens int     `json:"totalOutputTokens"`
+}
+
+type DateFieldCostRow struct {
+	Date      string  `json:"date"`
+	FieldKey  string  `json:"fieldKey"`
+	TotalCost float64 `json:"totalCost"`
+}
+
+type GetCostSummaryResultPayload struct {
+	Totals          CostTotals         `json:"totals"`
+	ByGroup         []CostSummaryRow   `json:"byGroup"`
+	RecentMissions  []MissionCostRow   `json:"recentMissions"`
+	ByDateAndField  []DateFieldCostRow `json:"byDateAndField,omitempty"`
+}

@@ -81,6 +81,14 @@ const (
 	TypeDeleteVariable           MessageType = "delete_variable"
 	TypeDeleteVariableResult     MessageType = "delete_variable_result"
 
+	// Cost tracking
+	TypeGetCostSummary       MessageType = "get_cost_summary"
+	TypeGetCostSummaryResult MessageType = "get_cost_summary_result"
+
+	// Event subscriptions
+	TypeSubscribe   MessageType = "subscribe"
+	TypeUnsubscribe MessageType = "unsubscribe"
+
 	// Shared folder operations
 	TypeListSharedFolders        MessageType = "list_shared_folders"
 	TypeListSharedFoldersResult  MessageType = "list_shared_folders_result"
